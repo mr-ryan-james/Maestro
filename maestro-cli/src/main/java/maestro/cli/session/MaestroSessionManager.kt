@@ -120,16 +120,34 @@ object MaestroSessionManager {
             reinstallDriver = reinstallDriver,
             platformConfiguration = executionPlan?.workspaceConfig?.platform
         )
-        Runtime.getRuntime().addShutdownHook(thread(start = false) {
+        logger.info(
+            "Created Maestro session id={} platform={} deviceId={} driverHostPort={}",
+            sessionId,
+            selectedDevice.platform,
+            selectedDevice.device?.instanceId ?: selectedDevice.deviceId ?: "unknown",
+            driverHostPort ?: defaultXcTestPort
+        )
+        val shutdownHook = thread(start = false) {
+            logger.info("Shutdown hook cleanup started for session id={}", sessionId)
             heartbeatFuture.cancel(true)
             SessionStore.delete(sessionId, selectedDevice.platform)
             runCatching { ScreenReporter.reportMaxDepth() }
-            if (SessionStore.activeSessions().isEmpty()) {
-                session.close()
-            }
-        })
+            runCatching { session.close() }
+            logger.info("Shutdown hook cleanup finished for session id={}", sessionId)
+        }
+        Runtime.getRuntime().addShutdownHook(shutdownHook)
 
-        return block(session)
+        return try {
+            block(session)
+        } finally {
+            logger.info("Finally cleanup started for session id={}", sessionId)
+            heartbeatFuture.cancel(true)
+            SessionStore.delete(sessionId, selectedDevice.platform)
+            runCatching { ScreenReporter.reportMaxDepth() }
+            runCatching { session.close() }
+            runCatching { Runtime.getRuntime().removeShutdownHook(shutdownHook) }
+            logger.info("Finally cleanup finished for session id={}", sessionId)
+        }
     }
 
     private fun selectDevice(

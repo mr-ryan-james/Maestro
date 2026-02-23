@@ -24,6 +24,14 @@ class XCTestDriverClient(
     private val reinstallDriver: Boolean = true,
 ) {
     private val logger = LoggerFactory.getLogger(XCTestDriverClient::class.java)
+    private val axRetryCount = System.getenv("MAESTRO_IOS_AX_RETRY_COUNT")
+        ?.toIntOrNull()
+        ?.coerceAtLeast(1)
+        ?: 3
+    private val axRetryBaseMs = System.getenv("MAESTRO_IOS_AX_RETRY_BASE_MS")
+        ?.toLongOrNull()
+        ?.coerceAtLeast(50L)
+        ?: 200L
 
     private lateinit var client: XCTestClient
 
@@ -44,10 +52,7 @@ class XCTestDriverClient(
     private val mapper = jacksonObjectMapper()
 
     fun viewHierarchy(installedApps: Set<String>, excludeKeyboardElements: Boolean): ViewHierarchy {
-        val responseString = executeJsonRequest(
-            "viewHierarchy",
-            ViewHierarchyRequest(installedApps, excludeKeyboardElements)
-        )
+        val responseString = executeViewHierarchyWithRetry(installedApps, excludeKeyboardElements)
         return mapper.readValue(responseString, ViewHierarchy::class.java)
     }
 
@@ -303,6 +308,55 @@ class XCTestDriverClient(
                 )
             }
         }
+    }
+
+    private fun executeViewHierarchyWithRetry(
+        installedApps: Set<String>,
+        excludeKeyboardElements: Boolean,
+    ): String {
+        val request = ViewHierarchyRequest(installedApps, excludeKeyboardElements)
+        var attempt = 1
+        while (true) {
+            try {
+                return executeJsonRequest("viewHierarchy", request)
+            } catch (error: Throwable) {
+                if (!isRetriableAXHierarchyError(error) || attempt >= axRetryCount) {
+                    throw error
+                }
+
+                val delayMs = axRetryDelayMs(attempt)
+                logger.warn(
+                    "Transient AX hierarchy failure (attempt {}/{}) host={} port={} delay={}ms error={}",
+                    attempt,
+                    axRetryCount,
+                    client.host,
+                    client.port,
+                    delayMs,
+                    error.message
+                )
+                try {
+                    Thread.sleep(delayMs)
+                } catch (interrupted: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw error
+                }
+                attempt += 1
+            }
+        }
+    }
+
+    private fun isRetriableAXHierarchyError(error: Throwable): Boolean {
+        val message = error.message ?: return false
+        return message.contains("kAXErrorInvalidUIElement", ignoreCase = true)
+            || message.contains("kAXErrorCannotComplete", ignoreCase = true)
+            || message.contains("Error getting element frame", ignoreCase = true)
+            || message.contains("Error getting main window", ignoreCase = true)
+    }
+
+    private fun axRetryDelayMs(attempt: Int): Long {
+        val shift = (attempt - 1).coerceAtMost(10)
+        val multiplier = 1L shl shift
+        return axRetryBaseMs * multiplier
     }
 
 }

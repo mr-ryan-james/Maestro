@@ -18,6 +18,7 @@ import xcuitest.XCTestClient
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
+import java.util.concurrent.TimeUnit
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.deleteRecursively
 import kotlin.time.Duration.Companion.seconds
@@ -60,6 +61,70 @@ class LocalXCTestInstaller(
 
     private var xcTestProcess: Process? = null
 
+    private fun killProcessByPid(pid: Int) {
+        runCatching {
+            logger.trace("Sending SIGTERM to pid=$pid")
+            ProcessBuilder(listOf("kill", pid.toString()))
+                .start()
+                .waitFor()
+        }.onFailure {
+            logger.warn("Failed to SIGTERM pid=$pid", it)
+        }
+
+        runCatching {
+            val isAlive = ProcessBuilder(listOf("kill", "-0", pid.toString()))
+                .start()
+                .waitFor() == 0
+            if (isAlive) {
+                logger.trace("pid=$pid still alive; sending SIGKILL")
+                ProcessBuilder(listOf("kill", "-9", pid.toString()))
+                    .start()
+                    .waitFor()
+            }
+        }.onFailure {
+            logger.warn("Failed to verify/force kill pid=$pid", it)
+        }
+    }
+
+    private fun hostListenerPidForPort(port: Int): Int? {
+        return runCatching {
+            val process = ProcessBuilder("bash", "-lc", "lsof -nPiTCP:${port} -sTCP:LISTEN -t | head -n1")
+                .start()
+            process.waitFor(2, TimeUnit.SECONDS)
+            process.inputStream.bufferedReader().readLine()?.trim()?.toIntOrNull()
+        }.getOrNull()
+    }
+
+    private fun stopRunnerProcessesWithFallback() {
+        logger.info("XCTest cleanup started for deviceId={} hostPort={}", deviceId, defaultPort)
+        logger.trace("Will attempt to stop all alive XCTest Runner processes before uninstalling")
+
+        if (xcTestProcess?.isAlive == true) {
+            logger.trace("XCTest Runner process started by us is alive, killing it")
+            xcTestProcess?.destroy()
+            runCatching { xcTestProcess?.waitFor(2, TimeUnit.SECONDS) }
+            if (xcTestProcess?.isAlive == true) {
+                xcTestProcess?.destroyForcibly()
+            }
+        }
+        xcTestProcess = null
+
+        val pidFromBundle = xcRunnerCLIUtils.pidForApp(UI_TEST_RUNNER_APP_BUNDLE_ID, deviceId)
+        if (pidFromBundle != null) {
+            logger.trace("Killing XCTest Runner process by bundle pid=$pidFromBundle")
+            killProcessByPid(pidFromBundle)
+        }
+
+        val pidFromPort = hostListenerPidForPort(defaultPort)
+        if (pidFromPort != null) {
+            logger.trace("Killing lingering listener for XCTest driver host port $defaultPort (pid=$pidFromPort)")
+            killProcessByPid(pidFromPort)
+        }
+
+        logger.trace("Finished stopping XCTest Runner processes")
+        logger.info("XCTest cleanup finished for deviceId={} hostPort={}", deviceId, defaultPort)
+    }
+
     override fun uninstall(): Boolean {
         return metrics.measured("operation", mapOf("command" to "uninstall")) {
             // FIXME(bartekpacia): This method probably doesn't have to care about killing the XCTest Runner process.
@@ -70,31 +135,20 @@ class LocalXCTestInstaller(
                 return@measured false
             }
 
-            if (!isChannelAlive()) return@measured false
+            stopRunnerProcessesWithFallback()
 
-            fun killXCTestRunnerProcess() {
-                logger.trace("Will attempt to stop all alive XCTest Runner processes before uninstalling")
-
-                if (xcTestProcess?.isAlive == true) {
-                    logger.trace("XCTest Runner process started by us is alive, killing it")
-                    xcTestProcess?.destroy()
-                }
-                xcTestProcess = null
-
-                val pid = xcRunnerCLIUtils.pidForApp(UI_TEST_RUNNER_APP_BUNDLE_ID, deviceId)
-                if (pid != null) {
-                    logger.trace("Killing XCTest Runner process with the `kill` command")
-                    ProcessBuilder(listOf("kill", pid.toString()))
-                        .start()
-                        .waitFor()
-                }
-
-                logger.trace("All XCTest Runner processes were stopped")
+            logger.trace("Stopping and uninstalling XCTest Runner from device $deviceId")
+            runCatching {
+                deviceController.stop(id = UI_TEST_RUNNER_APP_BUNDLE_ID)
+            }.onFailure {
+                logger.trace("Skipping explicit stop for XCTest Runner", it)
             }
-
-            killXCTestRunnerProcess()
-
-            logger.trace("Uninstalling XCTest Runner from device $deviceId")
+            runCatching {
+                deviceController.uninstall(id = UI_TEST_RUNNER_APP_BUNDLE_ID)
+            }.onFailure {
+                logger.trace("Explicit uninstall for XCTest Runner failed", it)
+            }
+            logger.info("XCTest uninstall completed for deviceId={} hostPort={}", deviceId, defaultPort)
             true
         }
     }
@@ -244,10 +298,13 @@ class LocalXCTestInstaller(
 
         logger.info("[Start] Cleaning up the ui test runner files")
         tempFileHandler.close()
+        stopRunnerProcessesWithFallback()
         if(reinstallDriver) {
             uninstall()
             deviceController.close()
             logger.info("[Done] Cleaning up the ui test runner files")
+        } else {
+            logger.info("[Done] Cleaning up the ui test runner files (reinstall disabled)")
         }
     }
 
