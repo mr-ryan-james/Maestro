@@ -22,19 +22,30 @@ object FileUtils {
      * @param to output zip file
      */
     fun zipDir(from: Path, to: Path) {
+        if (!from.exists() || !from.isDirectory()) {
+            return
+        }
         val stream = to.toFile().outputStream()
-        val files = Files.walk(from).filter { !it.isDirectory() }.toList()
+        val files = runCatching {
+            Files.walk(from).filter { !it.isDirectory() }.toList()
+        }.getOrElse {
+            return
+        }
         ZipOutputStream(stream).use { zs ->
-            try {
-                files.forEach {
-                    val relativePath = from.relativize(it).toString()
+            files.forEach { filePath ->
+                runCatching {
+                    val relativePath = from.relativize(filePath).toString()
                     val entry = ZipEntry(relativePath)
                     zs.putNextEntry(entry)
-                    Files.copy(it, zs)
+                    Files.copy(filePath, zs)
                     zs.closeEntry()
+                }.onFailure { error ->
+                    if (error is IOException) {
+                        error.printStackTrace()
+                    } else {
+                        throw error
+                    }
                 }
-            } catch (e: IOException) {
-                e.printStackTrace()
             }
         }
     }

@@ -4,6 +4,7 @@ import maestro.Driver
 import maestro.utils.FileUtils
 import net.harawata.appdirs.AppDirsFactory
 import java.io.File
+import java.nio.file.Files
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Date
@@ -87,9 +88,23 @@ object DebugLogStore {
 
     fun finalizeRun() {
         fileHandler.close()
+        if (!Files.exists(currentRunLogDirectory.toPath())) {
+            System.err.println(
+                "[maestro] Debug log directory missing at finalize: ${currentRunLogDirectory.absolutePath}"
+            )
+            return
+        }
         val output = File(currentRunLogDirectory.parent, "${currentRunLogDirectory.name}.zip")
-        FileUtils.zipDir(currentRunLogDirectory.toPath(), output.toPath())
-        currentRunLogDirectory.deleteRecursively()
+        runCatching {
+            FileUtils.zipDir(currentRunLogDirectory.toPath(), output.toPath())
+        }.onFailure {
+            System.err.println("[maestro] Failed to zip debug logs: ${it.message}")
+        }
+        runCatching {
+            currentRunLogDirectory.deleteRecursively()
+        }.onFailure {
+            System.err.println("[maestro] Failed to delete debug log directory: ${it.message}")
+        }
     }
 
     private fun logFile(named: String): File {
