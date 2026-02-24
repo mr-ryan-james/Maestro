@@ -95,15 +95,20 @@ object DebugLogStore {
             return
         }
         val output = File(currentRunLogDirectory.parent, "${currentRunLogDirectory.name}.zip")
-        runCatching {
+        val zipSucceeded = runCatching {
             FileUtils.zipDir(currentRunLogDirectory.toPath(), output.toPath())
         }.onFailure {
             System.err.println("[maestro] Failed to zip debug logs: ${it.message}")
-        }
-        runCatching {
-            currentRunLogDirectory.deleteRecursively()
-        }.onFailure {
-            System.err.println("[maestro] Failed to delete debug log directory: ${it.message}")
+        }.isSuccess
+
+        if (zipSucceeded) {
+            runCatching {
+                currentRunLogDirectory.deleteRecursively()
+            }.onFailure {
+                System.err.println("[maestro] Failed to delete debug log directory: ${it.message}")
+            }
+        } else {
+            System.err.println("[maestro] Keeping raw debug logs at: ${currentRunLogDirectory.absolutePath}")
         }
     }
 

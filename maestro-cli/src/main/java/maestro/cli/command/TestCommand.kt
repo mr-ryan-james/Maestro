@@ -536,6 +536,12 @@ class TestCommand : Callable<Int> {
     private fun selectPort(effectiveShards: Int): Int {
         // If user specified driver host port via CLI, use it
         parent?.driverHostPort?.let { port ->
+            if (effectiveShards > 1) {
+                throw CliError(
+                    "--driver-host-port cannot be combined with --shard-all/--shard-split. " +
+                        "Each shard requires a unique driver host port."
+                )
+            }
             if (!isPortAvailable(port)) {
                 throw CliError("Port $port is already in use. Please specify a different port with --driver-host-port")
             }
