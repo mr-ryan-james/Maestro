@@ -66,20 +66,27 @@ class LocalXCTestInstaller(
             logger.trace("Sending SIGTERM to pid=$pid")
             ProcessBuilder(listOf("kill", pid.toString()))
                 .start()
-                .waitFor()
+                .waitFor(2, TimeUnit.SECONDS)
         }.onFailure {
             logger.warn("Failed to SIGTERM pid=$pid", it)
         }
 
+        try {
+            Thread.sleep(1000)
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+            logger.warn("Interrupted while waiting for pid=$pid to exit after SIGTERM")
+        }
+
         runCatching {
-            val isAlive = ProcessBuilder(listOf("kill", "-0", pid.toString()))
-                .start()
-                .waitFor() == 0
+            val probe = ProcessBuilder(listOf("kill", "-0", pid.toString())).start()
+            val completed = probe.waitFor(2, TimeUnit.SECONDS)
+            val isAlive = completed && probe.exitValue() == 0
             if (isAlive) {
-                logger.trace("pid=$pid still alive; sending SIGKILL")
+                logger.trace("pid=$pid still alive after SIGTERM grace period; sending SIGKILL")
                 ProcessBuilder(listOf("kill", "-9", pid.toString()))
                     .start()
-                    .waitFor()
+                    .waitFor(2, TimeUnit.SECONDS)
             }
         }.onFailure {
             logger.warn("Failed to verify/force kill pid=$pid", it)
@@ -93,6 +100,18 @@ class LocalXCTestInstaller(
             process.waitFor(2, TimeUnit.SECONDS)
             process.inputStream.bufferedReader().readLine()?.trim()?.toIntOrNull()
         }.getOrNull()
+    }
+
+    private fun isXCTestProcess(pid: Int): Boolean {
+        return runCatching {
+            val process = ProcessBuilder("bash", "-lc", "ps -p $pid -o command=")
+                .start()
+            process.waitFor(2, TimeUnit.SECONDS)
+            val cmd = process.inputStream.bufferedReader().readLine()?.trim() ?: ""
+            cmd.contains("xctest", ignoreCase = true) ||
+                cmd.contains("XCTRunner", ignoreCase = true) ||
+                cmd.contains("maestro-driver", ignoreCase = true)
+        }.getOrDefault(false)
     }
 
     private fun stopRunnerProcessesWithFallback() {
@@ -116,9 +135,15 @@ class LocalXCTestInstaller(
         }
 
         val pidFromPort = hostListenerPidForPort(defaultPort)
-        if (pidFromPort != null) {
+        if (pidFromPort != null && isXCTestProcess(pidFromPort)) {
             logger.trace("Killing lingering listener for XCTest driver host port $defaultPort (pid=$pidFromPort)")
             killProcessByPid(pidFromPort)
+        } else if (pidFromPort != null) {
+            logger.warn(
+                "XCTest driver host port {} is occupied by non-XCTest process (pid={}); skipping kill",
+                defaultPort,
+                pidFromPort
+            )
         }
 
         logger.trace("Finished stopping XCTest Runner processes")

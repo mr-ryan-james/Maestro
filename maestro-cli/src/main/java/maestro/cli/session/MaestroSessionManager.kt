@@ -49,6 +49,7 @@ import xcuitest.installer.LocalXCTestInstaller
 import xcuitest.installer.LocalXCTestInstaller.*
 import java.nio.file.Paths
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
@@ -127,26 +128,31 @@ object MaestroSessionManager {
             selectedDevice.device?.instanceId ?: selectedDevice.deviceId ?: "unknown",
             driverHostPort ?: defaultXcTestPort
         )
+
+        val cleanupPerformed = AtomicBoolean(false)
+        val cleanupSession = { source: String ->
+            if (!cleanupPerformed.compareAndSet(false, true)) {
+                logger.info("Cleanup already completed for session id={}, source={}", sessionId, source)
+            } else {
+                logger.info("Cleanup started for session id={}, source={}", sessionId, source)
+                heartbeatFuture.cancel(true)
+                SessionStore.delete(sessionId, selectedDevice.platform)
+                runCatching { ScreenReporter.reportMaxDepth() }
+                runCatching { session.close() }
+                logger.info("Cleanup finished for session id={}, source={}", sessionId, source)
+            }
+        }
+
         val shutdownHook = thread(start = false) {
-            logger.info("Shutdown hook cleanup started for session id={}", sessionId)
-            heartbeatFuture.cancel(true)
-            SessionStore.delete(sessionId, selectedDevice.platform)
-            runCatching { ScreenReporter.reportMaxDepth() }
-            runCatching { session.close() }
-            logger.info("Shutdown hook cleanup finished for session id={}", sessionId)
+            cleanupSession("shutdown_hook")
         }
         Runtime.getRuntime().addShutdownHook(shutdownHook)
 
         return try {
             block(session)
         } finally {
-            logger.info("Finally cleanup started for session id={}", sessionId)
-            heartbeatFuture.cancel(true)
-            SessionStore.delete(sessionId, selectedDevice.platform)
-            runCatching { ScreenReporter.reportMaxDepth() }
-            runCatching { session.close() }
+            cleanupSession("finally")
             runCatching { Runtime.getRuntime().removeShutdownHook(shutdownHook) }
-            logger.info("Finally cleanup finished for session id={}", sessionId)
         }
     }
 
