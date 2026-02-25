@@ -5,6 +5,7 @@ import maestro.utils.HttpClient
 import maestro.utils.MaestroTimer
 import maestro.utils.Metrics
 import maestro.utils.MetricsProvider
+import maestro.utils.MaestroRunMetadata
 import maestro.utils.TempFileHandler
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
@@ -114,6 +115,86 @@ class LocalXCTestInstaller(
         }.getOrDefault(false)
     }
 
+    private fun processRunMetadata(pid: Int): Map<String, String> {
+        return runCatching {
+            val process = ProcessBuilder("bash", "-lc", "ps eww -p $pid -o command=")
+                .start()
+            process.waitFor(2, TimeUnit.SECONDS)
+            val cmd = process.inputStream.bufferedReader().readLine()?.trim().orEmpty()
+            if (cmd.isBlank()) {
+                return@runCatching emptyMap()
+            }
+
+            Regex("""(MAESTRO_[A-Z_]+)=([^\s]+)""")
+                .findAll(cmd)
+                .associate { it.groupValues[1] to it.groupValues[2] }
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun shouldKillProcess(pid: Int, source: String): Boolean {
+        val metadata = processRunMetadata(pid)
+        val current = MaestroRunMetadata.current()
+
+        val processRunId = metadata[MaestroRunMetadata.ENV_RUN_ID]
+        val processOwner = metadata[MaestroRunMetadata.ENV_RUN_OWNER]
+        val processLabel = metadata[MaestroRunMetadata.ENV_RUN_LABEL]
+        val processRepo = metadata[MaestroRunMetadata.ENV_REPO_NAME]
+        val forceStaleKill = MaestroRunMetadata.shouldForceStaleKill()
+
+        if (forceStaleKill) {
+            logger.warn(
+                "FORCED_STALE_KILL source={} pid={} currentRunId={} processRunId={} processOwner={} processLabel={} processRepo={}",
+                source,
+                pid,
+                current.runId,
+                processRunId ?: "unset",
+                processOwner ?: "unset",
+                processLabel ?: "unset",
+                processRepo ?: "unset",
+            )
+            return true
+        }
+
+        if (processRunId != null && processRunId != current.runId) {
+            logger.warn(
+                "Skipping kill for pid={} source={} due to run ownership mismatch (currentRunId={}, processRunId={}, processOwner={}, processLabel={}, processRepo={})",
+                pid,
+                source,
+                current.runId,
+                processRunId,
+                processOwner ?: "unset",
+                processLabel ?: "unset",
+                processRepo ?: "unset",
+            )
+            return false
+        }
+
+        if (processOwner != null && processOwner != current.runOwner) {
+            logger.warn(
+                "Skipping kill for pid={} source={} due to owner mismatch (currentOwner={}, processOwner={}, processRunId={}, processLabel={}, processRepo={})",
+                pid,
+                source,
+                current.runOwner,
+                processOwner,
+                processRunId ?: "unset",
+                processLabel ?: "unset",
+                processRepo ?: "unset",
+            )
+            return false
+        }
+
+        if (processRunId == null && processOwner == null && source == "port") {
+            logger.warn(
+                "Skipping kill for pid={} source={} because process has no Maestro ownership metadata and source is port-based",
+                pid,
+                source,
+            )
+            return false
+        }
+
+        return true
+    }
+
     private fun stopRunnerProcessesWithFallback() {
         logger.info("XCTest cleanup started for deviceId={} hostPort={}", deviceId, defaultPort)
         logger.trace("Will attempt to stop all alive XCTest Runner processes before uninstalling")
@@ -130,14 +211,26 @@ class LocalXCTestInstaller(
 
         val pidFromBundle = xcRunnerCLIUtils.pidForApp(UI_TEST_RUNNER_APP_BUNDLE_ID, deviceId)
         if (pidFromBundle != null) {
-            logger.trace("Killing XCTest Runner process by bundle pid=$pidFromBundle")
-            killProcessByPid(pidFromBundle)
+            if (shouldKillProcess(pidFromBundle, source = "bundle")) {
+                logger.trace("Killing XCTest Runner process by bundle pid=$pidFromBundle")
+                killProcessByPid(pidFromBundle)
+            } else {
+                logger.warn("Skipped killing XCTest Runner process by bundle pid={} due to ownership safeguards", pidFromBundle)
+            }
         }
 
         val pidFromPort = hostListenerPidForPort(defaultPort)
         if (pidFromPort != null && isXCTestProcess(pidFromPort)) {
-            logger.trace("Killing lingering listener for XCTest driver host port $defaultPort (pid=$pidFromPort)")
-            killProcessByPid(pidFromPort)
+            if (shouldKillProcess(pidFromPort, source = "port")) {
+                logger.trace("Killing lingering listener for XCTest driver host port $defaultPort (pid=$pidFromPort)")
+                killProcessByPid(pidFromPort)
+            } else {
+                logger.warn(
+                    "Skipped killing lingering listener for XCTest driver host port {} (pid={}) due to ownership safeguards",
+                    defaultPort,
+                    pidFromPort
+                )
+            }
         } else if (pidFromPort != null) {
             logger.warn(
                 "XCTest driver host port {} is occupied by non-XCTest process (pid={}); skipping kill",

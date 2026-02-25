@@ -1,5 +1,6 @@
 package util
 
+import maestro.utils.MaestroRunMetadata
 import java.io.File
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
@@ -33,6 +34,7 @@ object CommandLineUtils {
                             .redirectError(ProcessBuilder.Redirect.PIPE)
                 }
 
+        processBuilder.environment().putAll(MaestroRunMetadata.environmentVariables())
         processBuilder.environment().putAll(params)
         val process = processBuilder.start()
 

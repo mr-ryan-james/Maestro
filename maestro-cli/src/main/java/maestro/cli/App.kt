@@ -43,6 +43,7 @@ import maestro.cli.util.ChangeLogUtils
 import maestro.cli.util.ErrorReporter
 import maestro.cli.view.box
 import maestro.debuglog.DebugLogStore
+import maestro.utils.MaestroRunMetadata
 import picocli.AutoComplete.GenerateCompletion
 import picocli.CommandLine
 import picocli.CommandLine.Command
@@ -123,6 +124,7 @@ fun main(args: Array<String>) {
 
         Dependencies.install()
         Updates.fetchUpdatesAsync()
+        MaestroRunMetadata.initialize(command = "maestro")
 
         val commandLine = CommandLine(App())
             .setUsageHelpWidth(160)

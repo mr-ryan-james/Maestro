@@ -8,6 +8,7 @@ import maestro.device.util.PrintUtils
 import maestro.drivers.AndroidDriver
 import maestro.drivers.CdpWebDriver
 import maestro.utils.MaestroTimer
+import maestro.utils.MaestroRunMetadata
 import maestro.utils.TempFileHandler
 import okio.buffer
 import okio.source
@@ -23,6 +24,12 @@ object DeviceService {
 
     private val tempFileHandler = TempFileHandler()
     private val localSimulatorUtils = util.LocalSimulatorUtils(tempFileHandler)
+
+    private fun processBuilder(command: List<String>): ProcessBuilder {
+        return ProcessBuilder(*command.toTypedArray()).apply {
+            environment().putAll(MaestroRunMetadata.environmentVariables())
+        }
+    }
 
     fun startDevice(
         device: Device.AvailableForLaunch,
@@ -57,14 +64,16 @@ object DeviceService {
                 PrintUtils.message("Launching Emulator...")
                 val emulatorBinary = requireEmulatorBinary()
 
-                ProcessBuilder(
-                    emulatorBinary.absolutePath,
-                    "-avd",
-                    device.modelId,
-                    "-netdelay",
-                    "none",
-                    "-netspeed",
-                    "full"
+                processBuilder(
+                    listOf(
+                        emulatorBinary.absolutePath,
+                        "-avd",
+                        device.modelId,
+                        "-netdelay",
+                        "none",
+                        "-netspeed",
+                        "full"
+                    )
                 ).start().waitFor(10, TimeUnit.SECONDS)
 
                 var lastException: Exception? = null
@@ -187,7 +196,7 @@ object DeviceService {
                 val avdName = runCatching {
                     dadb.shell("getprop ro.kernel.qemu").output.trim().let { qemuProp ->
                         if (qemuProp == "1") {
-                            val avdNameResult = ProcessBuilder("adb", "-s", dadb.toString(), "emu", "avd", "name")
+                            val avdNameResult = processBuilder(listOf("adb", "-s", dadb.toString(), "emu", "avd", "name"))
                                 .redirectErrorStream(true)
                                 .start()
                                 .apply { waitFor(5, TimeUnit.SECONDS) }
@@ -218,7 +227,7 @@ object DeviceService {
         // connectedDevices.
         val avds = try {
             val emulatorBinary = requireEmulatorBinary()
-            ProcessBuilder(emulatorBinary.absolutePath, "-list-avds")
+            processBuilder(listOf(emulatorBinary.absolutePath, "-list-avds"))
                 .start()
                 .inputStream
                 .bufferedReader()
@@ -369,7 +378,7 @@ object DeviceService {
             "com.apple.CoreSimulator.SimRuntime.$os"
         )
 
-        val process = ProcessBuilder(*command.toTypedArray()).start()
+        val process = processBuilder(command).start()
         if (!process.waitFor(5, TimeUnit.MINUTES)) {
             throw TimeoutException()
         }
@@ -422,7 +431,7 @@ object DeviceService {
 
         if (force) command.add("--force")
 
-        val process = ProcessBuilder(*command.toTypedArray()).start()
+        val process = processBuilder(command).start()
 
         if (!process.waitFor(5, TimeUnit.MINUTES)) {
             throw TimeoutException()
@@ -447,7 +456,7 @@ object DeviceService {
             "list", "device"
         )
 
-        val process = ProcessBuilder(*command.toTypedArray()).start()
+        val process = processBuilder(command).start()
 
         if (!process.waitFor(1, TimeUnit.MINUTES)) {
             throw TimeoutException()
@@ -473,7 +482,7 @@ object DeviceService {
             "--list_installed"
         )
         try {
-            val process = ProcessBuilder(*command.toTypedArray()).start()
+            val process = processBuilder(command).start()
             if (!process.waitFor(1, TimeUnit.MINUTES)) {
                 throw TimeoutException()
             }
@@ -499,7 +508,7 @@ object DeviceService {
             image
         )
         try {
-            val process = ProcessBuilder(*command.toTypedArray())
+            val process = processBuilder(command)
                 .inheritIO()
                 .start()
             if (!process.waitFor(120, TimeUnit.MINUTES)) {
@@ -533,7 +542,7 @@ object DeviceService {
             uuid
         )
 
-        val process = ProcessBuilder(*command.toTypedArray()).start()
+        val process = processBuilder(command).start()
 
         if (!process.waitFor(1, TimeUnit.MINUTES)) {
             throw TimeoutException()
@@ -546,7 +555,7 @@ object DeviceService {
         val command = listOf("adb", "-s", deviceId, "emu", "kill")
 
         try {
-            val process = ProcessBuilder(*command.toTypedArray()).start()
+            val process = processBuilder(command).start()
 
             if (!process.waitFor(1, TimeUnit.MINUTES)) {
                 throw TimeoutException("Android kill command timed out")
@@ -570,7 +579,7 @@ object DeviceService {
         val command = listOf("xcrun", "simctl", "shutdown", deviceId)
 
         try {
-            val process = ProcessBuilder(*command.toTypedArray()).start()
+            val process = processBuilder(command).start()
 
             if (!process.waitFor(1, TimeUnit.MINUTES)) {
                 throw TimeoutException("iOS kill command timed out")

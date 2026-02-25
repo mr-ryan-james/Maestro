@@ -3,6 +3,7 @@ package util
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import maestro.utils.MaestroTimer
+import maestro.utils.MaestroRunMetadata
 import maestro.utils.TempFileHandler
 import org.rauschig.jarchivelib.ArchiveFormat
 import org.rauschig.jarchivelib.ArchiverFactory
@@ -346,6 +347,7 @@ class LocalSimulatorUtils(private val tempFileHandler: TempFileHandler) {
     ) {
         val outputFile = File(XCRunnerCLIUtils.logDirectory, "xctest_runner_$date.log")
         val params = mutableMapOf("SIMCTL_CHILD_PORT" to port.toString())
+        params.putAll(MaestroRunMetadata.prefixedEnvironmentVariables(prefix = "SIMCTL_CHILD_"))
         if (snapshotKeyHonorModalViews != null) {
             params["SIMCTL_CHILD_snapshotKeyHonorModalViews"] = snapshotKeyHonorModalViews.toString()
         }
