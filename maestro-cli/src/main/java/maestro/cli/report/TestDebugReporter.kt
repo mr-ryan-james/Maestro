@@ -13,6 +13,7 @@ import maestro.cli.util.EnvUtils
 import maestro.cli.util.IOSEnvUtils
 import maestro.debuglog.DebugLogStore
 import maestro.debuglog.LogConfig
+import maestro.utils.MaestroRunMetadata
 import maestro.orchestra.MaestroCommand
 import org.apache.logging.log4j.Level
 import org.apache.logging.log4j.LogManager
@@ -140,6 +141,17 @@ object TestDebugReporter {
 
     private fun logSystemInfo() {
         logger.info("Debug output path: {}", getDebugOutputPath().absolutePathString())
+        val runMetadata = MaestroRunMetadata.current()
+        logger.info(
+            "Run Metadata: runId={} label={} owner={} repo={} command={} pid={} forceStaleKill={}",
+            runMetadata.runId,
+            runMetadata.runLabel,
+            runMetadata.runOwner,
+            runMetadata.repoName,
+            runMetadata.command,
+            runMetadata.pid,
+            runMetadata.forceStaleKill,
+        )
 
         // Disable specific gRPC and Netty loggers
         Configurator.setLevel("io.grpc.netty.NettyClientHandler", Level.OFF)
@@ -160,6 +172,24 @@ object TestDebugReporter {
         logger.info("---------------------")
     }
 
+    private fun writeRunMetadata(path: Path) {
+        val runMetadata = MaestroRunMetadata.current()
+        val payload = linkedMapOf(
+            "runId" to runMetadata.runId,
+            "runLabel" to runMetadata.runLabel,
+            "runOwner" to runMetadata.runOwner,
+            "repoRoot" to runMetadata.repoRoot,
+            "repoName" to runMetadata.repoName,
+            "command" to runMetadata.command,
+            "startedAt" to runMetadata.startedAt,
+            "pid" to runMetadata.pid,
+            "parentPid" to runMetadata.parentPid,
+            "forceStaleKill" to runMetadata.forceStaleKill,
+        )
+        val outputFile = path.resolve("run-metadata.json").toFile()
+        mapper.writeValue(outputFile, payload)
+    }
+
     /**
      * Calls to this method should be done as soon as possible, to make all
      * loggers use our custom configuration rather than the defaults.
@@ -169,6 +199,7 @@ object TestDebugReporter {
         this.flattenDebugOutput = flattenDebugOutput
         val path = getDebugOutputPath()
         LogConfig.configure(logFileName = path.absolutePathString() + "/maestro.log", printToConsole = printToConsole)
+        writeRunMetadata(path)
         logSystemInfo()
         DebugLogStore.logSystemInfo()
     }

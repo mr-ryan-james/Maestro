@@ -1,5 +1,6 @@
 package util
 
+import maestro.utils.MaestroRunMetadata
 import util.CommandLineUtils.runCommand
 import java.io.File
 import java.nio.file.Path
@@ -30,6 +31,7 @@ object LocalIOSDeviceController {
     fun launchRunner(deviceId: String, port: Int, snapshotKeyHonorModalViews: Boolean?) {
         val outputFile = File(XCRunnerCLIUtils.logDirectory, "xctest_runner_$date.log")
         val params = mutableMapOf("SIMCTL_CHILD_PORT" to port.toString())
+        params.putAll(MaestroRunMetadata.prefixedEnvironmentVariables(prefix = "SIMCTL_CHILD_"))
         if (snapshotKeyHonorModalViews != null) {
             params["SIMCTL_CHILD_snapshotKeyHonorModalViews"] = snapshotKeyHonorModalViews.toString()
         }

@@ -1,6 +1,7 @@
 package util
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import maestro.utils.MaestroRunMetadata
 import maestro.utils.TempFileHandler
 import net.harawata.appdirs.AppDirsFactory
 import java.io.File
@@ -128,6 +129,7 @@ class XCRunnerCLIUtils(private val tempFileHandler: TempFileHandler = TempFileHa
         val outputFile = File(logDirectory, "xctest_runner_$date.log")
         val logOutputDir = tempFileHandler.createTempDirectory("maestro_xctestrunner_xcodebuild_output").toPath()
         val params = mutableMapOf("TEST_RUNNER_PORT" to port.toString())
+        params.putAll(MaestroRunMetadata.prefixedEnvironmentVariables(prefix = "TEST_RUNNER_"))
         if (snapshotKeyHonorModalViews != null) {
             params["TEST_RUNNER_snapshotKeyHonorModalViews"] = snapshotKeyHonorModalViews.toString()
         }

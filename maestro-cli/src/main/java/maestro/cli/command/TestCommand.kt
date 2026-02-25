@@ -65,6 +65,7 @@ import maestro.orchestra.error.ValidationError
 import maestro.orchestra.workspace.WorkspaceExecutionPlanner
 import maestro.orchestra.workspace.WorkspaceExecutionPlanner.ExecutionPlan
 import maestro.utils.isSingleFile
+import maestro.utils.MaestroRunMetadata
 import okio.sink
 import org.slf4j.LoggerFactory
 import picocli.CommandLine
@@ -227,6 +228,24 @@ class TestCommand : Callable<Int> {
         description = ["Device ID to run on explicitly, can be a comma separated list of IDs: --device \"Emulator_1,Emulator_2\" "],
     )
     var deviceId: String? = null
+
+    @Option(
+        names = ["--run-label"],
+        description = ["Optional run label included in Maestro logs and child process metadata."],
+    )
+    private var runLabel: String? = null
+
+    @Option(
+        names = ["--run-owner"],
+        description = ["Optional run owner included in Maestro logs and child process metadata."],
+    )
+    private var runOwner: String? = null
+
+    @Option(
+        names = ["--force-stale-kill"],
+        description = ["Force stale XCTest cleanup even if ownership metadata indicates another run."],
+    )
+    private var forceStaleKill: Boolean? = null
     
     @CommandLine.Spec
     lateinit var commandSpec: CommandLine.Model.CommandSpec
@@ -245,10 +264,27 @@ class TestCommand : Callable<Int> {
     }
   
     override fun call(): Int {
+        val runMetadata = MaestroRunMetadata.initialize(
+            command = "test",
+            runLabel = runLabel,
+            runOwner = runOwner,
+            forceStaleKill = forceStaleKill,
+        )
+
         TestDebugReporter.install(
             debugOutputPathAsString = debugOutput,
             flattenDebugOutput = flattenDebugOutput,
             printToConsole = parent?.verbose == true,
+        )
+        logger.info(
+            "RUN_METADATA runId={} label={} owner={} repo={} command={} pid={} forceStaleKill={}",
+            runMetadata.runId,
+            runMetadata.runLabel,
+            runMetadata.runOwner,
+            runMetadata.repoName,
+            runMetadata.command,
+            runMetadata.pid,
+            runMetadata.forceStaleKill,
         )
 
         if (shardSplit != null && shardAll != null) {

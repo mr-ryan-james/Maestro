@@ -1,20 +1,28 @@
 package maestro.debuglog
 
+import maestro.utils.MaestroRunMetadata
 import org.apache.logging.log4j.core.appender.FileAppender
 import org.apache.logging.log4j.core.config.Configurator
 import org.apache.logging.log4j.core.config.builder.api.ConfigurationBuilder
 import org.apache.logging.log4j.core.config.builder.api.ConfigurationBuilderFactory
 import org.apache.logging.log4j.core.config.builder.impl.BuiltConfiguration
+import org.apache.logging.log4j.ThreadContext
 
 object LogConfig {
 
-    private const val DEFAULT_FILE_LOG_PATTERN = "%d{HH:mm:ss.SSS} [%5level] %logger.%method: %msg%n"
-    private const val DEFAULT_CONSOLE_LOG_PATTERN = "%highlight([%5level]) %msg%n"
+    private const val RUN_METADATA_PATTERN = "[run=\${sys:maestro.run.id} owner=\${sys:maestro.run.owner} repo=\${sys:maestro.run.repoName} label=\${sys:maestro.run.label}]"
+    private const val DEFAULT_FILE_LOG_PATTERN = "%d{HH:mm:ss.SSS} [%5level] $RUN_METADATA_PATTERN %logger.%method: %msg%n"
+    private const val DEFAULT_CONSOLE_LOG_PATTERN = "%highlight([%5level]) $RUN_METADATA_PATTERN %msg%n"
 
     private val FILE_LOG_PATTERN: String = System.getenv("MAESTRO_CLI_LOG_PATTERN_FILE") ?: DEFAULT_FILE_LOG_PATTERN
     private val CONSOLE_LOG_PATTERN: String = System.getenv("MAESTRO_CLI_LOG_PATTERN_CONSOLE") ?: DEFAULT_CONSOLE_LOG_PATTERN
 
     fun configure(logFileName: String? = null, printToConsole: Boolean) {
+        val runMetadata = MaestroRunMetadata.current()
+        runMetadata.asLogContext().forEach { (key, value) ->
+            ThreadContext.put(key, value)
+        }
+
         val builder = ConfigurationBuilderFactory.newConfigurationBuilder()
         builder.setStatusLevel(org.apache.logging.log4j.Level.ERROR)
         builder.setConfigurationName("MaestroConfig")
