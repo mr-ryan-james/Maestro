@@ -320,19 +320,22 @@ class XCTestDriverClient(
             try {
                 return executeJsonRequest("viewHierarchy", request)
             } catch (error: Throwable) {
-                if (!isRetriableAXHierarchyError(error) || attempt >= axRetryCount) {
+                val classifierText = retryClassifierText(error)
+                val retryToken = retriableAXToken(classifierText)
+                if (retryToken == null || attempt >= axRetryCount) {
                     throw error
                 }
 
                 val delayMs = axRetryDelayMs(attempt)
                 logger.warn(
-                    "Transient AX hierarchy failure (attempt {}/{}) host={} port={} delay={}ms error={}",
+                    "Transient AX hierarchy failure (attempt {}/{}) host={} port={} delay={}ms token={} summary={}",
                     attempt,
                     axRetryCount,
                     client.host,
                     client.port,
                     delayMs,
-                    error.message
+                    retryToken,
+                    retryClassifierSummary(classifierText)
                 )
                 try {
                     Thread.sleep(delayMs)
@@ -345,12 +348,37 @@ class XCTestDriverClient(
         }
     }
 
-    private fun isRetriableAXHierarchyError(error: Throwable): Boolean {
-        val message = error.message ?: return false
-        return message.contains("kAXErrorInvalidUIElement", ignoreCase = true)
-            || message.contains("kAXErrorCannotComplete", ignoreCase = true)
-            || message.contains("Error getting element frame", ignoreCase = true)
-            || message.contains("Error getting main window", ignoreCase = true)
+    private fun retriableAXToken(classifierText: String): String? {
+        return RETRIABLE_AX_ERROR_TOKENS.firstOrNull { token ->
+            classifierText.contains(token, ignoreCase = true)
+        }
+    }
+
+    private fun retryClassifierText(error: Throwable): String {
+        val details = mutableListOf<String>()
+        error.message?.takeIf { it.isNotBlank() }?.let(details::add)
+
+        when (error) {
+            is XCUITestServerError.UnknownFailure -> details.add(error.errorResponse)
+            is XCUITestServerError.AppCrash -> details.add(error.errorResponse)
+            is XCUITestServerError.OperationTimeout -> details.add(error.errorResponse)
+            is XCUITestServerError.BadRequest -> details.add(error.errorResponse)
+            is XCUITestServerError.NetworkError -> details.add(error.errorResponse)
+        }
+
+        val throwableString = error.toString()
+        if (throwableString.isNotBlank()) {
+            details.add(throwableString)
+        }
+
+        return details.joinToString("\n")
+    }
+
+    private fun retryClassifierSummary(classifierText: String): String {
+        return classifierText.lineSequence()
+            .firstOrNull { it.isNotBlank() }
+            ?.take(180)
+            ?: "unknown"
     }
 
     private fun axRetryDelayMs(attempt: Int): Long {
@@ -359,4 +387,12 @@ class XCTestDriverClient(
         return axRetryBaseMs * multiplier
     }
 
+    companion object {
+        private val RETRIABLE_AX_ERROR_TOKENS = listOf(
+            "kAXErrorInvalidUIElement",
+            "kAXErrorCannotComplete",
+            "Error getting element frame",
+            "Error getting main window"
+        )
+    }
 }
