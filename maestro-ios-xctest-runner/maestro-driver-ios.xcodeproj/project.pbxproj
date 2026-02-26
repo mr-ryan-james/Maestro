@@ -13,6 +13,7 @@
 		32762AFA2966DC8300FB69BD /* SwipeRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32762AF92966DC8300FB69BD /* SwipeRequest.swift */; };
 		32A9C73C2D7A62B500545435 /* LaunchAppHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32A9C73B2D7A62AF00545435 /* LaunchAppHandler.swift */; };
 		32A9C73E2D7A631A00545435 /* LaunchAppRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32A9C73D2D7A631400545435 /* LaunchAppRequest.swift */; };
+		32A9C7402E0A100000545435 /* ShutdownHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32A9C73F2E0A0FFF00545435 /* ShutdownHandler.swift */; };
 		32ECCB262980449200A1A0A0 /* TouchRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32ECCB252980449200A1A0A0 /* TouchRequest.swift */; };
 		32ECCB28298044C200A1A0A0 /* TouchRouteHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32ECCB27298044C200A1A0A0 /* TouchRouteHandler.swift */; };
 		39F002647AA68C9B8DC39E61 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AF897D5D1CB7C6C46344E543 /* Foundation.framework */; };
@@ -165,6 +166,7 @@
 		32762AF92966DC8300FB69BD /* SwipeRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwipeRequest.swift; sourceTree = "<group>"; };
 		32A9C73B2D7A62AF00545435 /* LaunchAppHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchAppHandler.swift; sourceTree = "<group>"; };
 		32A9C73D2D7A631400545435 /* LaunchAppRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchAppRequest.swift; sourceTree = "<group>"; };
+		32A9C73F2E0A0FFF00545435 /* ShutdownHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShutdownHandler.swift; sourceTree = "<group>"; };
 		32ECCB252980449200A1A0A0 /* TouchRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchRequest.swift; sourceTree = "<group>"; };
 		32ECCB27298044C200A1A0A0 /* TouchRouteHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchRouteHandler.swift; sourceTree = "<group>"; };
 		52047F772A7A638E00BF982D /* StatusHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusHandler.swift; sourceTree = "<group>"; };
@@ -692,6 +694,7 @@
 			children = (
 				521C1F112D86CE8A0024EE42 /* TerminateAppHandler.swift */,
 				32A9C73B2D7A62AF00545435 /* LaunchAppHandler.swift */,
+				32A9C73F2E0A0FFF00545435 /* ShutdownHandler.swift */,
 				610D58F82A45B5DA00B4BBEB /* ViewHierarchyHandler.swift */,
 				943A9087293F5EAA00C85136 /* RunningAppRouteHandler.swift */,
 				32762AF72965E2A200FB69BD /* SwipeRouteHandler.swift */,
@@ -1016,6 +1019,7 @@
 				52F33A942AE6823100692902 /* StatusResponse.swift in Sources */,
 				32A9C73E2D7A631A00545435 /* LaunchAppRequest.swift in Sources */,
 				32A9C73C2D7A62B500545435 /* LaunchAppHandler.swift in Sources */,
+				32A9C7402E0A100000545435 /* ShutdownHandler.swift in Sources */,
 				610D58FB2A49E3CA00B4BBEB /* AXClientSwizzler.swift in Sources */,
 				F328D3E62A2A98E7000546D3 /* StringExtensions.swift in Sources */,
 				5B8E0ABC2CD562D000E9D439 /* SetOrientationHandler.swift in Sources */,

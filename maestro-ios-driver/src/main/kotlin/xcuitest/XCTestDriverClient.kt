@@ -179,6 +179,12 @@ class XCTestDriverClient(
     }
 
     fun close() {
+        if (::client.isInitialized) {
+            runCatching { requestRunnerShutdown() }
+                .onFailure {
+                    logger.warn("Graceful XCTest shutdown request failed", it)
+                }
+        }
         installer.close()
     }
 
@@ -385,6 +391,35 @@ class XCTestDriverClient(
         val shift = (attempt - 1).coerceAtMost(10)
         val multiplier = 1L shl shift
         return axRetryBaseMs * multiplier
+    }
+
+    private fun requestRunnerShutdown() {
+        val shutdownUrl = client.xctestAPIBuilder("shutdown").build()
+        val shutdownRequest = Request.Builder()
+            .url(shutdownUrl)
+            .get()
+            .build()
+        val shutdownClient = okHttpClient.newBuilder()
+            .readTimeout(java.time.Duration.ofSeconds(2))
+            .connectTimeout(java.time.Duration.ofSeconds(1))
+            .callTimeout(java.time.Duration.ofSeconds(2))
+            .build()
+
+        shutdownClient.newCall(shutdownRequest).execute().use { response ->
+            if (!response.isSuccessful) {
+                logger.warn(
+                    "XCTest shutdown request returned non-success status: code={} body={}",
+                    response.code,
+                    response.body?.string().orEmpty()
+                )
+            }
+        }
+
+        try {
+            Thread.sleep(200)
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
     }
 
     companion object {
