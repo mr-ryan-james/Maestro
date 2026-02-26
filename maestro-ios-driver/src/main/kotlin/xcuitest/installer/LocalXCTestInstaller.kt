@@ -18,10 +18,7 @@ import util.XCRunnerCLIUtils
 import xcuitest.XCTestClient
 import java.io.File
 import java.io.IOException
-import java.nio.file.Files
 import java.util.concurrent.TimeUnit
-import kotlin.io.path.ExperimentalPathApi
-import kotlin.io.path.deleteRecursively
 import kotlin.time.Duration.Companion.seconds
 
 class LocalXCTestInstaller(
@@ -199,12 +196,22 @@ class LocalXCTestInstaller(
         logger.info("XCTest cleanup started for deviceId={} hostPort={}", deviceId, defaultPort)
         logger.trace("Will attempt to stop all alive XCTest Runner processes before uninstalling")
 
-        if (xcTestProcess?.isAlive == true) {
+        val startedXcTestProcess = xcTestProcess
+        if (startedXcTestProcess?.isAlive == true) {
             logger.trace("XCTest Runner process started by us is alive, killing it")
-            xcTestProcess?.destroy()
-            runCatching { xcTestProcess?.waitFor(2, TimeUnit.SECONDS) }
-            if (xcTestProcess?.isAlive == true) {
-                xcTestProcess?.destroyForcibly()
+            startedXcTestProcess.destroy()
+            runCatching { startedXcTestProcess.waitFor(2, TimeUnit.SECONDS) }
+            if (startedXcTestProcess.isAlive) {
+                logger.trace("XCTest Runner process is still alive after SIGTERM, forcing kill")
+                startedXcTestProcess.destroyForcibly()
+                runCatching { startedXcTestProcess.waitFor(2, TimeUnit.SECONDS) }
+                if (startedXcTestProcess.isAlive) {
+                    logger.warn(
+                        "XCTest Runner process stayed alive after force kill attempt for deviceId={} hostPort={}",
+                        deviceId,
+                        defaultPort
+                    )
+                }
             }
         }
         xcTestProcess = null
@@ -255,12 +262,7 @@ class LocalXCTestInstaller(
 
             stopRunnerProcessesWithFallback()
 
-            logger.trace("Stopping and uninstalling XCTest Runner from device $deviceId")
-            runCatching {
-                deviceController.stop(id = UI_TEST_RUNNER_APP_BUNDLE_ID)
-            }.onFailure {
-                logger.trace("Skipping explicit stop for XCTest Runner", it)
-            }
+            logger.trace("Uninstalling XCTest Runner from device $deviceId")
             runCatching {
                 deviceController.uninstall(id = UI_TEST_RUNNER_APP_BUNDLE_ID)
             }.onFailure {
@@ -408,21 +410,36 @@ class LocalXCTestInstaller(
         }
     }
 
-    @OptIn(ExperimentalPathApi::class)
     override fun close() {
         if (useXcodeTestRunner) {
             return
         }
 
+        val startedAt = System.currentTimeMillis()
         logger.info("[Start] Cleaning up the ui test runner files")
-        tempFileHandler.close()
-        stopRunnerProcessesWithFallback()
-        if(reinstallDriver) {
-            uninstall()
-            deviceController.close()
-            logger.info("[Done] Cleaning up the ui test runner files")
-        } else {
-            logger.info("[Done] Cleaning up the ui test runner files (reinstall disabled)")
+
+        try {
+            if (reinstallDriver) {
+                uninstall()
+            } else {
+                stopRunnerProcessesWithFallback()
+            }
+        } finally {
+            runCatching { tempFileHandler.close() }.onFailure {
+                logger.warn(
+                    "Failed to cleanup temporary XCTest files for deviceId={} hostPort={}",
+                    deviceId,
+                    defaultPort,
+                    it
+                )
+            }
+
+            val elapsedMs = System.currentTimeMillis() - startedAt
+            if (reinstallDriver) {
+                logger.info("[Done] Cleaning up the ui test runner files (reinstall enabled) in {} ms", elapsedMs)
+            } else {
+                logger.info("[Done] Cleaning up the ui test runner files (reinstall disabled) in {} ms", elapsedMs)
+            }
         }
     }
 

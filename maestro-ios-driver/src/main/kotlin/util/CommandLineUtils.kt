@@ -40,7 +40,28 @@ object CommandLineUtils {
 
         if (waitForCompletion) {
             if (!process.waitFor(5, TimeUnit.MINUTES)) {
-                throw TimeoutException()
+                logger.error("Process timed out after 5 minutes: $parts")
+                process.destroy()
+                val terminatedAfterTerm = runCatching { process.waitFor(2, TimeUnit.SECONDS) }
+                    .onFailure {
+                        if (it is InterruptedException) {
+                            Thread.currentThread().interrupt()
+                        }
+                    }
+                    .getOrDefault(false)
+
+                if (!terminatedAfterTerm) {
+                    logger.warn("Process still alive after SIGTERM, forcing kill: $parts")
+                    process.destroyForcibly()
+                    runCatching { process.waitFor(2, TimeUnit.SECONDS) }
+                        .onFailure {
+                            if (it is InterruptedException) {
+                                Thread.currentThread().interrupt()
+                            }
+                        }
+                }
+
+                throw TimeoutException("Command timed out after 5 minutes: ${parts.joinToString(" ")}")
             }
 
             if (process.exitValue() != 0) {

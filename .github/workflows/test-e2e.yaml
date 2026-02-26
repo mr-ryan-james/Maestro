@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        java-version: [17]
+        java-version: [21]
 
     steps:
       - name: Clone repository
@@ -65,7 +65,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: zulu
-          java-version: 17
+          java-version: 21
 
       - name: Set up Chrome
         uses: browser-actions/setup-chrome@v2
@@ -75,7 +75,7 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v7
         with:
-          name: maestro-cli-jdk17-run_id${{ github.run_id }}
+          name: maestro-cli-jdk21-run_id${{ github.run_id }}
 
       - name: Add Maestro CLI executable to PATH
         run: |
@@ -134,12 +134,12 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: zulu
-          java-version: 17
+          java-version: 21
 
       - name: Download Maestro build from previous job
         uses: actions/download-artifact@v7
         with:
-          name: maestro-cli-jdk17-run_id${{ github.run_id }}
+          name: maestro-cli-jdk21-run_id${{ github.run_id }}
 
       - name: Add Maestro CLI executable to PATH
         run: |
@@ -290,12 +290,12 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: zulu
-          java-version: 17
+          java-version: 21
 
       - name: Download artifacts
         uses: actions/download-artifact@v7
         with:
-          name: maestro-cli-jdk17-run_id${{ github.run_id }}
+          name: maestro-cli-jdk21-run_id${{ github.run_id }}
 
       - name: Add Maestro CLI executable to PATH
         run: |
@@ -377,17 +377,17 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: zulu
-          java-version: 17
+          java-version: 21
 
       - name: Download Maestro artifact
         uses: actions/download-artifact@v7
         with:
-          name: maestro-cli-jdk17-run_id${{ github.run_id }}
+          name: maestro-cli-jdk21-run_id${{ github.run_id }}
 
       - name: Download build/Products artifact
         uses: actions/download-artifact@v7
         with:
-          name: build__Products-jdk17
+          name: build__Products-jdk21
           path: build/Products
 
       - name: Add Maestro CLI executable to PATH

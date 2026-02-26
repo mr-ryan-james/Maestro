@@ -188,7 +188,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-io-core:0.2.0")
     implementation(libs.mcp.kotlin.sdk) {
         version {
-            branch = "steviec/kotlin-1.8"
+            branch = "main"
         }
         exclude(group = "org.slf4j", module = "slf4j-simple")
     }
@@ -205,17 +205,17 @@ dependencies {
 }
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
 }
 
 kotlin {
-    jvmToolchain(17)
+    jvmToolchain(21)
 }
 
 tasks.named("compileKotlin", KotlinCompilationTask::class.java) {
     compilerOptions {
-        freeCompilerArgs.addAll("-Xjdk-release=17")
+        freeCompilerArgs.addAll("-Xjdk-release=21")
     }
 }
 
@@ -333,7 +333,7 @@ jreleaser {
             }
 
             dependencies {
-                dependency("openjdk", "17+")
+                dependency("openjdk", "21+")
             }
         }
     }
