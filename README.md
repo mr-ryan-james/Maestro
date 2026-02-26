@@ -59,7 +59,7 @@ appId: com.android.contacts
 ---
 ## Getting Started
 
-Maestro requires Java 17 or higher to be installed on your system. You can verify your Java version by running:
+Maestro requires Java 21 or higher to be installed on your system. You can verify your Java version by running:
 
 ```
 java -version

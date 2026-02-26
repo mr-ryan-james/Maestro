@@ -38,17 +38,17 @@ tasks.whenTaskAdded {
 }
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
 }
 
 kotlin {
-    jvmToolchain(17)
+    jvmToolchain(21)
 }
 
 tasks.named("compileKotlin", KotlinCompilationTask) {
     compilerOptions {
-        freeCompilerArgs.addAll("-Xjdk-release=17")
+        freeCompilerArgs.addAll("-Xjdk-release=21")
     }
 }
 

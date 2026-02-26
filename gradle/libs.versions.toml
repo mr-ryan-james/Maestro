@@ -60,7 +60,7 @@ coroutines = "1.8.0"
 kotlinx-html = "0.8.0"
 clikt = "4.2.2"
 gmsLocation = "21.3.0"
-mcpKotlinSdk = "steviec/kotlin-1.8"
+mcpKotlinSdk = "main"
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
