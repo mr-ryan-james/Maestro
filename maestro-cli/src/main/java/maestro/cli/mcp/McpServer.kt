@@ -25,6 +25,19 @@ import maestro.cli.mcp.tools.CheckFlowSyntaxTool
 import maestro.cli.mcp.tools.InspectViewHierarchyTool
 import maestro.cli.mcp.tools.CheatSheetTool
 import maestro.cli.mcp.tools.QueryDocsTool
+import maestro.cli.mcp.tools.HideKeyboardTool
+import maestro.cli.mcp.tools.SwipeTool
+import maestro.cli.mcp.tools.ScrollTool
+import maestro.cli.mcp.tools.ScrollUntilVisibleTool
+import maestro.cli.mcp.tools.EraseTextTool
+import maestro.cli.mcp.tools.AssertVisibleTool
+import maestro.cli.mcp.tools.AssertNotVisibleTool
+import maestro.cli.mcp.tools.WaitForAnimationToEndTool
+import maestro.cli.mcp.tools.PressKeyTool
+import maestro.cli.mcp.tools.ClearStateTool
+import maestro.cli.mcp.tools.SetLocationTool
+import maestro.cli.mcp.tools.CopyTextFromTool
+import maestro.cli.mcp.tools.OpenLinkTool
 import maestro.cli.util.WorkingDirectory
 
 // Main function to run the Maestro MCP server
@@ -62,7 +75,20 @@ fun runMaestroMcpServer() {
         CheckFlowSyntaxTool.create(),
         InspectViewHierarchyTool.create(sessionManager),
         CheatSheetTool.create(),
-        QueryDocsTool.create()
+        QueryDocsTool.create(),
+        HideKeyboardTool.create(sessionManager),
+        SwipeTool.create(sessionManager),
+        ScrollTool.create(sessionManager),
+        ScrollUntilVisibleTool.create(sessionManager),
+        EraseTextTool.create(sessionManager),
+        AssertVisibleTool.create(sessionManager),
+        AssertNotVisibleTool.create(sessionManager),
+        WaitForAnimationToEndTool.create(sessionManager),
+        PressKeyTool.create(sessionManager),
+        ClearStateTool.create(sessionManager),
+        SetLocationTool.create(sessionManager),
+        CopyTextFromTool.create(sessionManager),
+        OpenLinkTool.create(sessionManager)
     ))
 
 
