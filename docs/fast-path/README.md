@@ -13,6 +13,7 @@ The fast path is:
 ## What Changed
 
 - `session_id` is the preferred runtime handle for repeated device work
+- `maestro daemon` is the maximal-performance control plane, but the recent non-daemon fast path remains supported for apps that do not use the semantic bridge
 - hot MCP/device tools reuse an existing session instead of reopening the driver
 - `execute_batch`, `await_event`, `query_elements`, and `snapshot` are first-class
 - `visibleNow` / `notVisibleNow` are intended for zero-wait guard logic
@@ -36,6 +37,12 @@ Full hierarchy is still available, but it should be fallback behavior on the hot
 - UI-auth and UI dev-launcher handoff in local fast mode
 
 Those paths still exist for compatibility or diagnostic coverage, but they are not the recommended local iteration path.
+
+Compatibility note:
+
+- wrappers and local scripts may set `MAESTRO_USE_DAEMON_HTTP=1` to force the daemon path
+- set `MAESTRO_USE_DAEMON_HTTP=0` to stay on the recent fast non-daemon path
+- the default wrapper mode is `MAESTRO_USE_DAEMON_HTTP=auto`, which prefers the daemon when healthy and falls back to the fast non-daemon path otherwise
 
 ## Related Guides
 
