@@ -191,6 +191,7 @@ dependencies {
         version {
             branch = "main"
         }
+        exclude(group = "io.ktor")
         exclude(group = "org.slf4j", module = "slf4j-simple")
     }
     implementation(libs.logging.sl4j)

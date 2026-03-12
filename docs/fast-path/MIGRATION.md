@@ -10,6 +10,13 @@ Use this guide when moving a project from legacy Maestro usage to the faster for
 - verify the target Metro/dev server is the correct app before launching automation
 - use wrapper-backed artifact directories so the live trace files are preserved
 
+Compatibility modes:
+
+- `MAESTRO_USE_DAEMON_HTTP=auto` is the default wrapper mode and prefers the daemon when available
+- `MAESTRO_USE_DAEMON_HTTP=1` forces the daemon-backed maximal path
+- `MAESTRO_USE_DAEMON_HTTP=0` preserves the recent fast non-daemon path for apps that do not expose a semantic bridge yet
+- apps without custom TSX or bridge code remain supported on the recent fast non-daemon path; the daemon/semantic bridge path is additive, not a breaking requirement
+
 ## Old To New Mapping
 
 | Old path | New path |

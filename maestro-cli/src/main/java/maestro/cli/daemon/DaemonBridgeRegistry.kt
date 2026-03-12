@@ -31,6 +31,8 @@ object DaemonBridgeRegistry {
         val knownOverlays: List<String> = emptyList(),
         val primaryAction: String? = null,
         val lastCommand: String? = null,
+        val lastCommandId: String? = null,
+        val lastCommandStatus: String? = null,
         val stateVersion: Long = 0L,
         val updatedAtMs: Long = System.currentTimeMillis(),
     )
@@ -246,6 +248,12 @@ object DaemonBridgeRegistry {
             lastCommand = statePatch["last_command"]?.toString()
                 ?: statePatch["lastCommand"]?.toString()
                 ?: previous.state.lastCommand,
+            lastCommandId = statePatch["last_command_id"]?.toString()
+                ?: statePatch["lastCommandId"]?.toString()
+                ?: previous.state.lastCommandId,
+            lastCommandStatus = statePatch["last_command_status"]?.toString()
+                ?: statePatch["lastCommandStatus"]?.toString()
+                ?: previous.state.lastCommandStatus,
             stateVersion = (statePatch["state_version"] as? Number)?.toLong()
                 ?: (statePatch["stateVersion"] as? Number)?.toLong()
                 ?: previous.state.stateVersion,

@@ -8,6 +8,7 @@ import picocli.CommandLine
 
 @CommandLine.Command(
     name = "daemon",
+    mixinStandardHelpOptions = true,
     description = [
         "Starts the long-lived Maestro daemon for hot-session automation, local API access, and app-bridge connections."
     ],
