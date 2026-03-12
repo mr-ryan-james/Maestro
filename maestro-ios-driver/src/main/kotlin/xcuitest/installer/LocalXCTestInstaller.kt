@@ -1,6 +1,7 @@
 package xcuitest.installer
 
 import device.IOSDevice
+import maestro.debuglog.LiveTraceLogger
 import maestro.utils.HttpClient
 import maestro.utils.MaestroTimer
 import maestro.utils.Metrics
@@ -276,6 +277,10 @@ class LocalXCTestInstaller(
     override fun start(): XCTestClient {
         return metrics.measured("operation", mapOf("command" to "start")) {
             logger.info("start()")
+            LiveTraceLogger.note(
+                event = "XCTEST_INSTALLER_START",
+                detail = "deviceId=$deviceId hostPort=$defaultPort reinstallDriver=$reinstallDriver useXcodeTestRunner=$useXcodeTestRunner",
+            )
 
             if (useXcodeTestRunner) {
                 logger.info("USE_XCODE_TEST_RUNNER is set. Will wait for XCTest runner to be started manually")
@@ -299,11 +304,21 @@ class LocalXCTestInstaller(
 
             while (System.currentTimeMillis() - startTime < getStartupTimeout()) {
                 runCatching {
-                    if (isChannelAlive()) return@measured XCTestClient(host, defaultPort)
+                    if (isChannelAlive()) {
+                        LiveTraceLogger.note(
+                            event = "XCTEST_INSTALLER_READY",
+                            detail = "deviceId=$deviceId hostPort=$defaultPort startupMs=${System.currentTimeMillis() - startTime}",
+                        )
+                        return@measured XCTestClient(host, defaultPort)
+                    }
                 }
                 Thread.sleep(500)
             }
 
+            LiveTraceLogger.note(
+                event = "XCTEST_INSTALLER_TIMEOUT",
+                detail = "deviceId=$deviceId hostPort=$defaultPort timeoutMs=${getStartupTimeout()}",
+            )
             throw IOSDriverTimeoutException("iOS driver not ready in time, consider increasing timeout by configuring MAESTRO_DRIVER_STARTUP_TIMEOUT env variable")
         }
     }
@@ -358,6 +373,10 @@ class LocalXCTestInstaller(
             }
         } catch (ignore: IOException) {
             logger.info("[Failed] Perform XCUITest driver status check on $deviceId, exception: $ignore")
+            LiveTraceLogger.note(
+                event = "XCTEST_STATUS_CHECK_FAILURE",
+                detail = "deviceId=$deviceId hostPort=$defaultPort message=${ignore.message}",
+            )
             false
         }
 

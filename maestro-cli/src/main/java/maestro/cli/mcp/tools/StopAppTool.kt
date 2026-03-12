@@ -5,9 +5,6 @@ import io.modelcontextprotocol.kotlin.sdk.server.RegisteredTool
 import kotlinx.serialization.json.*
 import maestro.cli.session.MaestroSessionManager
 import maestro.orchestra.StopAppCommand
-import maestro.orchestra.Orchestra
-import maestro.orchestra.MaestroCommand
-import kotlinx.coroutines.runBlocking
 
 object StopAppTool {
     fun create(sessionManager: MaestroSessionManager): RegisteredTool {
@@ -21,52 +18,49 @@ object StopAppTool {
                             put("type", "string")
                             put("description", "The ID of the device to stop the app on")
                         }
+                        putJsonObject("session_id") {
+                            put("type", "string")
+                            put("description", "Optional hot session id returned by open_session")
+                        }
                         putJsonObject("appId") {
                             put("type", "string")
                             put("description", "Bundle ID or app ID to stop")
                         }
                     },
-                    required = listOf("device_id", "appId")
+                    required = listOf("appId")
                 )
             )
         ) { request ->
             try {
-                val deviceId = request.arguments["device_id"]?.jsonPrimitive?.content
-                val appId = request.arguments["appId"]?.jsonPrimitive?.content
-                
-                if (deviceId == null || appId == null) {
+                val deviceId = ToolSupport.resolveDeviceId(request)
+                val appId = ToolSupport.requiredString(request, "appId")
+
+                if (deviceId == null) {
                     return@RegisteredTool CallToolResult(
-                        content = listOf(TextContent("Both device_id and appId are required")),
+                        content = listOf(TextContent(ToolSupport.requireDeviceIdMessage())),
                         isError = true
                     )
                 }
-                
-                val result = sessionManager.newSession(
-                    host = null,
-                    port = null,
-                    driverHostPort = null,
+                if (appId == null) {
+                    return@RegisteredTool CallToolResult(
+                        content = listOf(TextContent("appId is required")),
+                        isError = true
+                    )
+                }
+
+                val result = ToolSupport.runCommand(
+                    sessionManager = sessionManager,
+                    request = request,
                     deviceId = deviceId,
-                    platform = null
-                ) { session ->
-                    val command = StopAppCommand(
+                    command = StopAppCommand(
                         appId = appId,
                         label = null,
-                        optional = false
-                    )
-                    
-                    val orchestra = Orchestra(session.maestro)
-                    runBlocking {
-                        orchestra.executeCommands(listOf(MaestroCommand(command = command)))
-                    }
-                    
-                    buildJsonObject {
-                        put("success", true)
-                        put("device_id", deviceId)
-                        put("app_id", appId)
-                        put("message", "App stopped successfully")
-                    }.toString()
-                }
-                
+                        optional = false,
+                    ),
+                    message = "App stopped successfully",
+                    extra = { put("app_id", appId) },
+                )
+
                 CallToolResult(content = listOf(TextContent(result)))
             } catch (e: Exception) {
                 CallToolResult(

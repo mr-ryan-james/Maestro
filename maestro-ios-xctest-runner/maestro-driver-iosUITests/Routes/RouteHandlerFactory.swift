@@ -32,6 +32,10 @@ class RouteHandlerFactory {
             return SetPermissionsHandler()
         case .viewHierarchy:
             return ViewHierarchyHandler()
+        case .automationSnapshot:
+            return AutomationSnapshotHandler()
+        case .queryAutomationElements:
+            return AutomationQueryHandler()
         case .status:
             return StatusHandler()
         case .keyboard:

@@ -29,6 +29,7 @@ import maestro.cli.report.FlowDebugOutput
 import maestro.cli.runner.resultview.ResultView
 import maestro.cli.runner.resultview.UiState
 import maestro.cli.util.PrintUtils
+import maestro.debuglog.LiveTraceLogger
 import maestro.orchestra.ApplyConfigurationCommand
 import maestro.orchestra.CompositeCommand
 import maestro.orchestra.MaestroCommand
@@ -96,6 +97,7 @@ object MaestroCommandRunner {
         }
 
         refreshUi()
+        LiveTraceLogger.flowStarted(flowName, aiOutput.flowFile.absolutePath)
 
         if (analyze) {
             ScreenshotUtils.takeDebugScreenshotByCommand(maestro, debugOutput, CommandStatus.PENDING)
@@ -107,8 +109,13 @@ object MaestroCommandRunner {
             maestro = maestro,
             screenshotsDir = testOutputDir?.resolve("screenshots"),
             insights = CliInsights,
-            onCommandStart = { _, command ->
+            onCommandStart = { index, command ->
                 logger.info("${command.description()} RUNNING")
+                LiveTraceLogger.commandStarted(
+                    flowName = flowName,
+                    command = command.description(),
+                    index = index,
+                )
                 commandStatuses[command] = CommandStatus.RUNNING
                 debugOutput.commands[command] = CommandDebugMetadata(
                     timestamp = System.currentTimeMillis(),
@@ -128,6 +135,12 @@ object MaestroCommandRunner {
                 debugOutput.commands[command]?.apply {
                     status = CommandStatus.COMPLETED
                     calculateDuration()
+                    LiveTraceLogger.commandFinished(
+                        flowName = flowName,
+                        command = command.description(),
+                        outcome = "COMPLETED",
+                        durationMs = duration,
+                    )
                 }
                 refreshUi()
             },
@@ -148,12 +161,24 @@ object MaestroCommandRunner {
 
                 logger.info("${command.description()} FAILED")
                 commandStatuses[command] = CommandStatus.FAILED
+                LiveTraceLogger.commandFinished(
+                    flowName = flowName,
+                    command = command.description(),
+                    outcome = "FAILED",
+                    durationMs = debugOutput.commands[command]?.duration,
+                    detail = e.message,
+                )
                 refreshUi()
                 Orchestra.ErrorResolution.FAIL
             },
             onCommandSkipped = { _, command ->
                 logger.info("${command.description()} SKIPPED")
                 commandStatuses[command] = CommandStatus.SKIPPED
+                LiveTraceLogger.commandFinished(
+                    flowName = flowName,
+                    command = command.description(),
+                    outcome = "SKIPPED",
+                )
                 debugOutput.commands[command]?.apply {
                     status = CommandStatus.SKIPPED
                 }
@@ -162,6 +187,11 @@ object MaestroCommandRunner {
             onCommandWarned = { _, command ->
                 logger.info("${command.description()} WARNED")
                 commandStatuses[command] = CommandStatus.WARNED
+                LiveTraceLogger.commandFinished(
+                    flowName = flowName,
+                    command = command.description(),
+                    outcome = "WARNED",
+                )
                 debugOutput.commands[command]?.apply {
                     status = CommandStatus.WARNED
                 }
@@ -199,6 +229,11 @@ object MaestroCommandRunner {
         )
 
         val flowSuccess = orchestra.runFlow(commands)
+        LiveTraceLogger.flowCompleted(
+            flowName = flowName,
+            success = flowSuccess,
+            detail = debugOutput.exception?.message,
+        )
 
         // Warn users about deprecated Rhino JS engine
         val isRhinoExplicitlyRequested = config?.ext?.get("jsEngine") == "rhino"

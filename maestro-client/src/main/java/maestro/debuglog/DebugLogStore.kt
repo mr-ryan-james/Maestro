@@ -24,7 +24,7 @@ object DebugLogStore {
     private const val KEEP_LOG_COUNT = 6
     val logDirectory = File(AppDirsFactory.getInstance().getUserLogDir(APP_NAME, null, APP_AUTHOR))
 
-    private val currentRunLogDirectory: File
+    private var currentRunLogDirectory: File
     private val consoleHandler: ConsoleHandler
     private val fileHandler: FileHandler
 
@@ -32,8 +32,7 @@ object DebugLogStore {
         val dateFormatter = DateTimeFormatter.ofPattern(LOG_DIR_DATE_FORMAT)
         val date = dateFormatter.format(LocalDateTime.now())
 
-        currentRunLogDirectory = File(logDirectory, date)
-        currentRunLogDirectory.mkdirs()
+        currentRunLogDirectory = prepareCurrentRunLogDirectory(date)
         removeOldLogs(logDirectory)
 
         consoleHandler = ConsoleHandler()
@@ -45,8 +44,7 @@ object DebugLogStore {
             }
         }
 
-        val maestroLogFile = logFile("maestro")
-        fileHandler = FileHandler(maestroLogFile.absolutePath)
+        fileHandler = createFileHandler()
         fileHandler.level = Level.ALL
         fileHandler.formatter = object : SimpleFormatter() {
             private val format = "[%1\$tF %1\$tT] [%2$-7s] %3\$s %n"
@@ -113,7 +111,40 @@ object DebugLogStore {
     }
 
     private fun logFile(named: String): File {
+        currentRunLogDirectory.mkdirs()
         return File(currentRunLogDirectory, "$named.log")
+    }
+
+    private fun prepareCurrentRunLogDirectory(date: String): File {
+        val candidates = listOf(
+            File(logDirectory, date),
+            File(System.getProperty("user.home"), ".maestro/logs/$date"),
+        )
+
+        candidates.forEach { candidate ->
+            if (candidate.exists() || candidate.mkdirs()) {
+                return candidate
+            }
+        }
+
+        return Files.createTempDirectory("maestro-logs-$date-").toFile()
+    }
+
+    private fun createFileHandler(): FileHandler {
+        val primaryLogFile = logFile("maestro")
+        return runCatching {
+            primaryLogFile.parentFile?.mkdirs()
+            FileHandler(primaryLogFile.absolutePath)
+        }.getOrElse { firstError ->
+            val fallbackDirectory = Files.createTempDirectory("maestro-logs-fallback-").toFile()
+            System.err.println(
+                "[maestro] Falling back to temporary debug log directory ${fallbackDirectory.absolutePath}: ${firstError.message}"
+            )
+            currentRunLogDirectory = fallbackDirectory
+            val fallbackLogFile = logFile("maestro")
+            fallbackLogFile.parentFile?.mkdirs()
+            FileHandler(fallbackLogFile.absolutePath)
+        }
     }
 
     private fun removeOldLogs(baseDir: File) {

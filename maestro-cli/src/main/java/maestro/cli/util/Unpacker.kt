@@ -66,15 +66,36 @@ object Unpacker {
     }
 
     private fun grantBinaryPermissions(file: File) {
-        if (isPosixFilesystem()) {
-            Files.setPosixFilePermissions(
-                file.toPath(),
-                setOf(
-                    PosixFilePermission.OWNER_EXECUTE,
-                    PosixFilePermission.OWNER_READ,
-                    PosixFilePermission.OWNER_WRITE,
-                )
-            )
+        if (!isPosixFilesystem()) {
+            return
+        }
+
+        val requiredPermissions = setOf(
+            PosixFilePermission.OWNER_EXECUTE,
+            PosixFilePermission.OWNER_READ,
+            PosixFilePermission.OWNER_WRITE,
+        )
+
+        val currentPermissions = runCatching {
+            Files.getPosixFilePermissions(file.toPath())
+        }.getOrNull()
+
+        if (currentPermissions?.containsAll(requiredPermissions) == true) {
+            return
+        }
+
+        runCatching {
+            Files.setPosixFilePermissions(file.toPath(), requiredPermissions)
+        }.getOrElse { error ->
+            val refreshedPermissions = runCatching {
+                Files.getPosixFilePermissions(file.toPath())
+            }.getOrNull()
+
+            if (refreshedPermissions?.containsAll(requiredPermissions) == true) {
+                return
+            }
+
+            throw error
         }
     }
 

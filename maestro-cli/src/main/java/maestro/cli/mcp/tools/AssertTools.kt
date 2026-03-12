@@ -12,6 +12,10 @@ private fun assertInputSchema(): Tool.Input {
     return Tool.Input(
         properties = buildJsonObject {
             putJsonObject("device_id") { put("type", "string"); put("description", "The ID of the device") }
+            putJsonObject("session_id") {
+                put("type", "string")
+                put("description", "Optional hot session id returned by open_session")
+            }
             putJsonObject("text") { put("type", "string") }
             putJsonObject("id") { put("type", "string") }
             putJsonObject("index") { put("type", "integer") }
@@ -22,7 +26,7 @@ private fun assertInputSchema(): Tool.Input {
             putJsonObject("selected") { put("type", "boolean") }
             putJsonObject("timeout_ms") { put("type", "integer"); put("description", "Optional timeout in milliseconds") }
         },
-        required = listOf("device_id"),
+        required = emptyList(),
     )
 }
 
@@ -35,10 +39,13 @@ object AssertVisibleTool {
                 inputSchema = assertInputSchema(),
             ),
         ) { request ->
-            val deviceId = ToolSupport.requiredString(request, "device_id")
+            val deviceId = ToolSupport.resolveDeviceId(request)
             val selector = ToolSupport.buildSelector(request, requireSelector = true)
             if (deviceId == null) {
-                return@RegisteredTool CallToolResult(listOf(TextContent("device_id is required")), isError = true)
+                return@RegisteredTool CallToolResult(
+                    listOf(TextContent(ToolSupport.requireDeviceIdMessage())),
+                    isError = true,
+                )
             }
             if (selector == null) {
                 return@RegisteredTool CallToolResult(listOf(TextContent("A selector is required via text or id")), isError = true)
@@ -47,6 +54,7 @@ object AssertVisibleTool {
             try {
                 val result = ToolSupport.runCommand(
                     sessionManager = sessionManager,
+                    request = request,
                     deviceId = deviceId,
                     command = AssertCommand(visible = selector, timeout = timeoutMs),
                     message = "Visibility assertion passed",
@@ -69,10 +77,13 @@ object AssertNotVisibleTool {
                 inputSchema = assertInputSchema(),
             ),
         ) { request ->
-            val deviceId = ToolSupport.requiredString(request, "device_id")
+            val deviceId = ToolSupport.resolveDeviceId(request)
             val selector = ToolSupport.buildSelector(request, requireSelector = true)
             if (deviceId == null) {
-                return@RegisteredTool CallToolResult(listOf(TextContent("device_id is required")), isError = true)
+                return@RegisteredTool CallToolResult(
+                    listOf(TextContent(ToolSupport.requireDeviceIdMessage())),
+                    isError = true,
+                )
             }
             if (selector == null) {
                 return@RegisteredTool CallToolResult(listOf(TextContent("A selector is required via text or id")), isError = true)
@@ -81,6 +92,7 @@ object AssertNotVisibleTool {
             try {
                 val result = ToolSupport.runCommand(
                     sessionManager = sessionManager,
+                    request = request,
                     deviceId = deviceId,
                     command = AssertCommand(notVisible = selector, timeout = timeoutMs),
                     message = "Non-visibility assertion passed",

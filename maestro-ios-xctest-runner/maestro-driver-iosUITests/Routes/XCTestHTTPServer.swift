@@ -16,6 +16,8 @@ enum Route: String, CaseIterable {
     case setOrientation
     case setPermissions
     case viewHierarchy
+    case automationSnapshot
+    case queryAutomationElements
     case status
     case keyboard
     case launchApp

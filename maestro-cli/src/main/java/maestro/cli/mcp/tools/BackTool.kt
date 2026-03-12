@@ -5,9 +5,6 @@ import io.modelcontextprotocol.kotlin.sdk.server.RegisteredTool
 import kotlinx.serialization.json.*
 import maestro.cli.session.MaestroSessionManager
 import maestro.orchestra.BackPressCommand
-import maestro.orchestra.Orchestra
-import maestro.orchestra.MaestroCommand
-import kotlinx.coroutines.runBlocking
 
 object BackTool {
     fun create(sessionManager: MaestroSessionManager): RegisteredTool {
@@ -21,45 +18,32 @@ object BackTool {
                             put("type", "string")
                             put("description", "The ID of the device to press back on")
                         }
+                        putJsonObject("session_id") {
+                            put("type", "string")
+                            put("description", "Optional hot session id returned by open_session")
+                        }
                     },
-                    required = listOf("device_id")
+                    required = emptyList()
                 )
             )
         ) { request ->
             try {
-                val deviceId = request.arguments["device_id"]?.jsonPrimitive?.content
-                
+                val deviceId = ToolSupport.resolveDeviceId(request)
                 if (deviceId == null) {
                     return@RegisteredTool CallToolResult(
-                        content = listOf(TextContent("device_id is required")),
+                        content = listOf(TextContent(ToolSupport.requireDeviceIdMessage())),
                         isError = true
                     )
                 }
-                
-                val result = sessionManager.newSession(
-                    host = null,
-                    port = null,
-                    driverHostPort = null,
+
+                val result = ToolSupport.runCommand(
+                    sessionManager = sessionManager,
+                    request = request,
                     deviceId = deviceId,
-                    platform = null
-                ) { session ->
-                    val command = BackPressCommand(
-                        label = null,
-                        optional = false
-                    )
-                    
-                    val orchestra = Orchestra(session.maestro)
-                    runBlocking {
-                        orchestra.executeCommands(listOf(MaestroCommand(command = command)))
-                    }
-                    
-                    buildJsonObject {
-                        put("success", true)
-                        put("device_id", deviceId)
-                        put("message", "Back button pressed successfully")
-                    }.toString()
-                }
-                
+                    command = BackPressCommand(label = null, optional = false),
+                    message = "Back button pressed successfully",
+                )
+
                 CallToolResult(content = listOf(TextContent(result)))
             } catch (e: Exception) {
                 CallToolResult(

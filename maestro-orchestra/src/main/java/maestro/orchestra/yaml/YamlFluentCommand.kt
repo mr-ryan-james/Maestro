@@ -27,6 +27,7 @@ import maestro.Point
 import maestro.TapRepeat
 import maestro.orchestra.AddMediaCommand
 import maestro.orchestra.AssertConditionCommand
+import maestro.orchestra.AssertNoneVisibleNowCommand
 import maestro.orchestra.AssertNoDefectsWithAICommand
 import maestro.orchestra.AssertScreenshotCommand
 import maestro.orchestra.AssertWithAICommand
@@ -35,6 +36,7 @@ import maestro.orchestra.ClearKeychainCommand
 import maestro.orchestra.ClearStateCommand
 import maestro.orchestra.Condition
 import maestro.orchestra.CopyTextFromCommand
+import maestro.orchestra.DismissKnownOverlaysCommand
 import maestro.orchestra.SetClipboardCommand
 import maestro.orchestra.ElementSelector
 import maestro.orchestra.ElementTrait
@@ -67,6 +69,7 @@ import maestro.orchestra.StopAppCommand
 import maestro.orchestra.StopRecordingCommand
 import maestro.orchestra.SwipeCommand
 import maestro.orchestra.TakeScreenshotCommand
+import maestro.orchestra.TapFirstVisibleNowCommand
 import maestro.orchestra.TapOnElementCommand
 import maestro.orchestra.TapOnPointV2Command
 import maestro.orchestra.ToggleAirplaneModeCommand
@@ -93,6 +96,9 @@ data class YamlFluentCommand(
     val longPressOn: YamlElementSelectorUnion? = null,
     val assertVisible: YamlElementSelectorUnion? = null,
     val assertNotVisible: YamlElementSelectorUnion? = null,
+    val assertVisibleNow: YamlElementSelectorUnion? = null,
+    val assertNotVisibleNow: YamlElementSelectorUnion? = null,
+    val assertNoneVisibleNow: List<YamlElementSelectorUnion>? = null,
     val assertTrue: YamlAssertTrue? = null,
     val assertNoDefectsWithAI: YamlAssertNoDefectsWithAI? = null,
     val assertScreenshot: YamlAssertScreenshot? = null,
@@ -103,6 +109,8 @@ data class YamlFluentCommand(
     val hideKeyboard: YamlActionHideKeyboard? = null,
     val pasteText: YamlActionPasteText? = null,
     val scroll: YamlActionScroll? = null,
+    val dismissKnownOverlays: YamlDismissKnownOverlays? = null,
+    val tapFirstVisibleNow: YamlTapFirstVisibleNow? = null,
     val inputText: YamlInputText? = null,
     val inputRandomText: YamlInputRandomText? = null,
     val inputRandomNumber: YamlInputRandomNumber? = null,
@@ -179,6 +187,40 @@ data class YamlFluentCommand(
                         ),
                         label = (assertNotVisible as? YamlElementSelector)?.label,
                         optional = (assertNotVisible as? YamlElementSelector)?.optional ?: false,
+                    )
+                )
+            )
+
+            assertVisibleNow != null -> listOf(
+                MaestroCommand(
+                    AssertConditionCommand(
+                        condition = Condition(
+                            visibleNow = toElementSelector(assertVisibleNow),
+                        ),
+                        timeout = "0",
+                        label = (assertVisibleNow as? YamlElementSelector)?.label,
+                        optional = (assertVisibleNow as? YamlElementSelector)?.optional ?: false,
+                    )
+                )
+            )
+
+            assertNotVisibleNow != null -> listOf(
+                MaestroCommand(
+                    AssertConditionCommand(
+                        condition = Condition(
+                            notVisibleNow = toElementSelector(assertNotVisibleNow),
+                        ),
+                        timeout = "0",
+                        label = (assertNotVisibleNow as? YamlElementSelector)?.label,
+                        optional = (assertNotVisibleNow as? YamlElementSelector)?.optional ?: false,
+                    )
+                )
+            )
+
+            assertNoneVisibleNow != null -> listOf(
+                MaestroCommand(
+                    AssertNoneVisibleNowCommand(
+                        selectors = assertNoneVisibleNow.map(::toElementSelector),
                     )
                 )
             )
@@ -315,6 +357,25 @@ data class YamlFluentCommand(
             )
 
             scroll != null -> listOf(MaestroCommand(ScrollCommand(label = scroll.label, optional = scroll.optional)))
+            dismissKnownOverlays != null -> listOf(
+                MaestroCommand(
+                    DismissKnownOverlaysCommand(
+                        maxPasses = dismissKnownOverlays.maxPasses ?: 2,
+                        label = dismissKnownOverlays.label,
+                        optional = dismissKnownOverlays.optional,
+                    )
+                )
+            )
+            tapFirstVisibleNow != null -> listOf(
+                MaestroCommand(
+                    TapFirstVisibleNowCommand(
+                        selectors = tapFirstVisibleNow.selectors.map(::toElementSelector),
+                        waitToSettleTimeoutMs = tapFirstVisibleNow.waitToSettleTimeoutMs,
+                        label = tapFirstVisibleNow.label,
+                        optional = tapFirstVisibleNow.optional,
+                    )
+                )
+            )
             takeScreenshot != null -> listOf(
                 MaestroCommand(
                     TakeScreenshotCommand(
@@ -1006,8 +1067,11 @@ data class YamlFluentCommand(
         return Condition(
             platform = platform,
             visible = visible?.let { toElementSelector(it) },
+            visibleNow = visibleNow?.let { toElementSelector(it) },
             notVisible = notVisible?.let { toElementSelector(it) },
+            notVisibleNow = notVisibleNow?.let { toElementSelector(it) },
             scriptCondition = `true`?.trim(),
+            conditionTimeoutMs = conditionTimeoutMs,
             label = label
         )
     }

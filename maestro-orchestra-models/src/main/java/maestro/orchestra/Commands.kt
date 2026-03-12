@@ -435,6 +435,57 @@ data class AssertConditionCommand(
     }
 }
 
+data class DismissKnownOverlaysCommand(
+    val maxPasses: Int = 2,
+    override val label: String? = null,
+    override val optional: Boolean = false,
+) : Command {
+
+    override val originalDescription: String
+        get() = "Dismiss known overlays (maxPasses=$maxPasses)"
+
+    override fun evaluateScripts(jsEngine: JsEngine): Command {
+        return copy(
+            label = label?.evaluateScripts(jsEngine),
+        )
+    }
+}
+
+data class TapFirstVisibleNowCommand(
+    val selectors: List<ElementSelector>,
+    val waitToSettleTimeoutMs: Int? = null,
+    override val label: String? = null,
+    override val optional: Boolean = false,
+) : Command {
+
+    override val originalDescription: String
+        get() = "Tap first visible now from ${selectors.joinToString { it.description() }}"
+
+    override fun evaluateScripts(jsEngine: JsEngine): Command {
+        return copy(
+            selectors = selectors.map { it.evaluateScripts(jsEngine) },
+            label = label?.evaluateScripts(jsEngine),
+        )
+    }
+}
+
+data class AssertNoneVisibleNowCommand(
+    val selectors: List<ElementSelector>,
+    override val label: String? = null,
+    override val optional: Boolean = false,
+) : Command {
+
+    override val originalDescription: String
+        get() = "Assert that none of ${selectors.joinToString { it.description() }} are visible now"
+
+    override fun evaluateScripts(jsEngine: JsEngine): Command {
+        return copy(
+            selectors = selectors.map { it.evaluateScripts(jsEngine) },
+            label = label?.evaluateScripts(jsEngine),
+        )
+    }
+}
+
 data class AssertNoDefectsWithAICommand(
     override val optional: Boolean = true,
     override val label: String? = null,

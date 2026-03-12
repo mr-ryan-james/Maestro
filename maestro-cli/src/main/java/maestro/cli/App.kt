@@ -30,6 +30,7 @@ import maestro.cli.command.DownloadSamplesCommand
 import maestro.cli.command.DriverCommand
 import maestro.cli.command.LoginCommand
 import maestro.cli.command.LogoutCommand
+import maestro.cli.command.DaemonCommand
 import maestro.cli.command.McpCommand
 import maestro.cli.command.PrintHierarchyCommand
 import maestro.cli.command.QueryCommand
@@ -70,6 +71,7 @@ import kotlin.system.exitProcess
         CheckSyntaxCommand::class,
         DriverCommand::class,
         McpCommand::class,
+        DaemonCommand::class,
     ]
 )
 class App {

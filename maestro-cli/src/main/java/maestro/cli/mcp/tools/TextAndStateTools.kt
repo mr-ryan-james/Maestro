@@ -21,21 +21,29 @@ object EraseTextTool {
                 inputSchema = Tool.Input(
                     properties = buildJsonObject {
                         putJsonObject("device_id") { put("type", "string"); put("description", "The ID of the device") }
+                        putJsonObject("session_id") {
+                            put("type", "string")
+                            put("description", "Optional hot session id returned by open_session")
+                        }
                         putJsonObject("characters_to_erase") { put("type", "integer"); put("description", "Optional number of characters to erase") }
                     },
-                    required = listOf("device_id"),
+                    required = emptyList(),
                 ),
             ),
         ) { request ->
-            val deviceId = ToolSupport.requiredString(request, "device_id")
+            val deviceId = ToolSupport.resolveDeviceId(request)
             if (deviceId == null) {
-                return@RegisteredTool CallToolResult(listOf(TextContent("device_id is required")), isError = true)
+                return@RegisteredTool CallToolResult(
+                    listOf(TextContent(ToolSupport.requireDeviceIdMessage())),
+                    isError = true,
+                )
             }
             val count = ToolSupport.optionalInt(request, "characters_to_erase")
             CallToolResult(
                 content = listOf(TextContent(
                     ToolSupport.runCommand(
                         sessionManager = sessionManager,
+                        request = request,
                         deviceId = deviceId,
                         command = EraseTextCommand(count),
                         message = "Text erased successfully",
@@ -56,17 +64,24 @@ object PressKeyTool {
                 inputSchema = Tool.Input(
                     properties = buildJsonObject {
                         putJsonObject("device_id") { put("type", "string"); put("description", "The ID of the device") }
+                        putJsonObject("session_id") {
+                            put("type", "string")
+                            put("description", "Optional hot session id returned by open_session")
+                        }
                         putJsonObject("key") { put("type", "string"); put("description", "Key name such as enter, tab, backspace, back, home, escape" ) }
                     },
-                    required = listOf("device_id", "key"),
+                    required = listOf("key"),
                 ),
             ),
         ) { request ->
-            val deviceId = ToolSupport.requiredString(request, "device_id")
+            val deviceId = ToolSupport.resolveDeviceId(request)
             val rawKey = ToolSupport.requiredString(request, "key")
             val key = ToolSupport.parseKeyCode(rawKey)
             if (deviceId == null) {
-                return@RegisteredTool CallToolResult(listOf(TextContent("device_id is required")), isError = true)
+                return@RegisteredTool CallToolResult(
+                    listOf(TextContent(ToolSupport.requireDeviceIdMessage())),
+                    isError = true,
+                )
             }
             if (key == null) {
                 return@RegisteredTool CallToolResult(listOf(TextContent("Unsupported key: ${rawKey ?: ""}")), isError = true)
@@ -75,6 +90,7 @@ object PressKeyTool {
                 content = listOf(TextContent(
                     ToolSupport.runCommand(
                         sessionManager = sessionManager,
+                        request = request,
                         deviceId = deviceId,
                         command = PressKeyCommand(key),
                         message = "Key press executed successfully",
@@ -95,21 +111,32 @@ object ClearStateTool {
                 inputSchema = Tool.Input(
                     properties = buildJsonObject {
                         putJsonObject("device_id") { put("type", "string"); put("description", "The ID of the device") }
+                        putJsonObject("session_id") {
+                            put("type", "string")
+                            put("description", "Optional hot session id returned by open_session")
+                        }
                         putJsonObject("app_id") { put("type", "string"); put("description", "The app id / bundle id to clear") }
                     },
-                    required = listOf("device_id", "app_id"),
+                    required = listOf("app_id"),
                 ),
             ),
         ) { request ->
-            val deviceId = ToolSupport.requiredString(request, "device_id")
+            val deviceId = ToolSupport.resolveDeviceId(request)
             val appId = ToolSupport.requiredString(request, "app_id")
-            if (deviceId == null || appId == null) {
-                return@RegisteredTool CallToolResult(listOf(TextContent("Both device_id and app_id are required")), isError = true)
+            if (deviceId == null) {
+                return@RegisteredTool CallToolResult(
+                    listOf(TextContent(ToolSupport.requireDeviceIdMessage())),
+                    isError = true,
+                )
+            }
+            if (appId == null) {
+                return@RegisteredTool CallToolResult(listOf(TextContent("app_id is required")), isError = true)
             }
             CallToolResult(
                 content = listOf(TextContent(
                     ToolSupport.runCommand(
                         sessionManager = sessionManager,
+                        request = request,
                         deviceId = deviceId,
                         command = ClearStateCommand(appId),
                         message = "App state cleared successfully",
@@ -130,23 +157,34 @@ object SetLocationTool {
                 inputSchema = Tool.Input(
                     properties = buildJsonObject {
                         putJsonObject("device_id") { put("type", "string"); put("description", "The ID of the device") }
+                        putJsonObject("session_id") {
+                            put("type", "string")
+                            put("description", "Optional hot session id returned by open_session")
+                        }
                         putJsonObject("latitude") { put("type", "number"); put("description", "Latitude" ) }
                         putJsonObject("longitude") { put("type", "number"); put("description", "Longitude" ) }
                     },
-                    required = listOf("device_id", "latitude", "longitude"),
+                    required = listOf("latitude", "longitude"),
                 ),
             ),
         ) { request ->
-            val deviceId = ToolSupport.requiredString(request, "device_id")
+            val deviceId = ToolSupport.resolveDeviceId(request)
             val latitude = ToolSupport.optionalDouble(request, "latitude")
             val longitude = ToolSupport.optionalDouble(request, "longitude")
-            if (deviceId == null || latitude == null || longitude == null) {
-                return@RegisteredTool CallToolResult(listOf(TextContent("device_id, latitude, and longitude are required")), isError = true)
+            if (deviceId == null) {
+                return@RegisteredTool CallToolResult(
+                    listOf(TextContent(ToolSupport.requireDeviceIdMessage())),
+                    isError = true,
+                )
+            }
+            if (latitude == null || longitude == null) {
+                return@RegisteredTool CallToolResult(listOf(TextContent("latitude and longitude are required")), isError = true)
             }
             CallToolResult(
                 content = listOf(TextContent(
                     ToolSupport.runCommand(
                         sessionManager = sessionManager,
+                        request = request,
                         deviceId = deviceId,
                         command = SetLocationCommand(latitude.toString(), longitude.toString()),
                         message = "Location set successfully",
@@ -170,23 +208,34 @@ object OpenLinkTool {
                 inputSchema = Tool.Input(
                     properties = buildJsonObject {
                         putJsonObject("device_id") { put("type", "string"); put("description", "The ID of the device") }
+                        putJsonObject("session_id") {
+                            put("type", "string")
+                            put("description", "Optional hot session id returned by open_session")
+                        }
                         putJsonObject("link") { put("type", "string"); put("description", "The link or deep link to open") }
                         putJsonObject("auto_verify") { put("type", "boolean"); put("description", "Whether to request auto verification") }
                         putJsonObject("browser") { put("type", "boolean"); put("description", "Whether to force browser open") }
                     },
-                    required = listOf("device_id", "link"),
+                    required = listOf("link"),
                 ),
             ),
         ) { request ->
-            val deviceId = ToolSupport.requiredString(request, "device_id")
+            val deviceId = ToolSupport.resolveDeviceId(request)
             val link = ToolSupport.requiredString(request, "link")
-            if (deviceId == null || link == null) {
-                return@RegisteredTool CallToolResult(listOf(TextContent("Both device_id and link are required")), isError = true)
+            if (deviceId == null) {
+                return@RegisteredTool CallToolResult(
+                    listOf(TextContent(ToolSupport.requireDeviceIdMessage())),
+                    isError = true,
+                )
+            }
+            if (link == null) {
+                return@RegisteredTool CallToolResult(listOf(TextContent("link is required")), isError = true)
             }
             CallToolResult(
                 content = listOf(TextContent(
                     ToolSupport.runCommand(
                         sessionManager = sessionManager,
+                        request = request,
                         deviceId = deviceId,
                         command = OpenLinkCommand(
                             link = link,
@@ -211,6 +260,10 @@ object CopyTextFromTool {
                 inputSchema = Tool.Input(
                     properties = buildJsonObject {
                         putJsonObject("device_id") { put("type", "string"); put("description", "The ID of the device") }
+                        putJsonObject("session_id") {
+                            put("type", "string")
+                            put("description", "Optional hot session id returned by open_session")
+                        }
                         putJsonObject("text") { put("type", "string") }
                         putJsonObject("id") { put("type", "string") }
                         putJsonObject("index") { put("type", "integer") }
@@ -220,39 +273,45 @@ object CopyTextFromTool {
                         putJsonObject("focused") { put("type", "boolean") }
                         putJsonObject("selected") { put("type", "boolean") }
                     },
-                    required = listOf("device_id"),
+                    required = emptyList(),
                 ),
             ),
         ) { request ->
-            val deviceId = ToolSupport.requiredString(request, "device_id")
+            val deviceId = ToolSupport.resolveDeviceId(request)
             val selector = ToolSupport.buildSelector(request, requireSelector = true)
             if (deviceId == null) {
-                return@RegisteredTool CallToolResult(listOf(TextContent("device_id is required")), isError = true)
+                return@RegisteredTool CallToolResult(
+                    listOf(TextContent(ToolSupport.requireDeviceIdMessage())),
+                    isError = true,
+                )
             }
             if (selector == null) {
                 return@RegisteredTool CallToolResult(listOf(TextContent("A selector is required via text or id")), isError = true)
             }
 
             try {
-                val result = ToolSupport.executeSession(sessionManager, deviceId) { session ->
-                    val hierarchy = session.maestro.viewHierarchy()
-                    val matches = ToolSupport.findMatchingNodes(hierarchy, request)
-                    val node = matches.firstOrNull()
-                        ?: throw IllegalArgumentException("No matching element found")
+                val hierarchy = ToolSupport.loadViewHierarchy(
+                    sessionManager = sessionManager,
+                    request = request,
+                    deviceId = deviceId,
+                )
+                val matches = ToolSupport.findMatchingNodes(hierarchy, request)
+                val node = matches.firstOrNull()
+                    ?: throw IllegalArgumentException("No matching element found")
 
-                    val copiedText = node.attributes["text"]
-                        ?: node.attributes["hintText"]
-                        ?: node.attributes["accessibilityText"]
-                        ?: throw IllegalArgumentException("Element does not expose text content")
+                val copiedText = node.attributes["text"]
+                    ?: node.attributes["hintText"]
+                    ?: node.attributes["accessibilityText"]
+                    ?: throw IllegalArgumentException("Element does not expose text content")
 
-                    ToolSupport.successJson(
-                        deviceId = deviceId,
-                        message = "Copied text successfully",
-                    ) {
-                        put("text", copiedText)
-                        put("match_count", matches.size)
-                    }
-                }
+                val result = ToolSupport.successJson(
+                    deviceId = deviceId,
+                    sessionId = ToolSupport.optionalSessionId(request),
+                    message = "Copied text successfully",
+                ) {
+                    put("text", copiedText)
+                    put("match_count", matches.size)
+                }.toString()
                 CallToolResult(content = listOf(TextContent(result)))
             } catch (e: Exception) {
                 CallToolResult(

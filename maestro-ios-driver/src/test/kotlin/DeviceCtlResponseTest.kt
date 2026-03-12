@@ -1,7 +1,6 @@
 import com.google.common.truth.Truth.assertThat
-import io.mockk.every
-import io.mockk.mockk
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import util.DeviceCtlProcess
 import util.LocalIOSDevice
 import java.nio.file.Files
@@ -17,14 +16,45 @@ class DeviceCtlResponseTest {
         val deviceOutput = Files.createTempFile("output", ".json").apply {
             writeText(deviceCtlOutput)
         }
-        val deviceCtlProcess = mockk<DeviceCtlProcess>()
-        every { deviceCtlProcess.devicectlDevicesOutput() } returns deviceOutput.toFile()
+        val deviceCtlProcess = object : DeviceCtlProcess() {
+            override fun devicectlDevicesOutput() = deviceOutput.toFile()
+        }
 
         // when
         val connectedDevices = LocalIOSDevice(deviceCtlProcess).listDeviceViaDeviceCtl()
 
         // then
         assertThat(connectedDevices).isNotEmpty()
+    }
+
+    @Test
+    fun `returns empty list when devicectl response is missing result`() {
+        val deviceOutput = Files.createTempFile("output", ".json").apply {
+            writeText("""{"info":{"outcome":"success"}}""")
+        }
+        val deviceCtlProcess = object : DeviceCtlProcess() {
+            override fun devicectlDevicesOutput() = deviceOutput.toFile()
+        }
+
+        val connectedDevices = LocalIOSDevice(deviceCtlProcess).listDeviceViaDeviceCtl()
+
+        assertThat(connectedDevices).isEmpty()
+    }
+
+    @Test
+    fun `device lookup still fails cleanly when devicectl response is missing result`() {
+        val deviceOutput = Files.createTempFile("output", ".json").apply {
+            writeText("""{"info":{"outcome":"success"}}""")
+        }
+        val deviceCtlProcess = object : DeviceCtlProcess() {
+            override fun devicectlDevicesOutput() = deviceOutput.toFile()
+        }
+
+        val error = assertThrows<IllegalArgumentException> {
+            LocalIOSDevice(deviceCtlProcess).listDeviceViaDeviceCtl("missing-udid")
+        }
+
+        assertThat(error.message).contains("missing-udid")
     }
 
     private fun getDeviceCtlOutput(): String {
