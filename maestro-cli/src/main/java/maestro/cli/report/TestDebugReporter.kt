@@ -12,6 +12,7 @@ import maestro.cli.util.CiUtils
 import maestro.cli.util.EnvUtils
 import maestro.cli.util.IOSEnvUtils
 import maestro.debuglog.DebugLogStore
+import maestro.debuglog.LiveTraceLogger
 import maestro.debuglog.LogConfig
 import maestro.utils.MaestroRunMetadata
 import maestro.orchestra.MaestroCommand
@@ -48,6 +49,8 @@ object TestDebugReporter {
     private var debugOutputPathAsString: String? = null
     private var flattenDebugOutput: Boolean = false
     private var testOutputDir: Path? = null
+    private var liveTracePath: Path? = null
+    private var liveStatusPath: Path? = null
 
     // AI outputs must be saved separately at the end of the flow.
     fun saveSuggestions(outputs: List<FlowAIOutput>, path: Path) {
@@ -208,7 +211,13 @@ object TestDebugReporter {
         this.testOutputDir = testOutputDir
         // Reset debugOutputPath so getDebugOutputPath() will properly handle directory creation
         debugOutputPath = null
+        liveTracePath = null
+        liveStatusPath = null
     }
+
+    fun getLiveTracePath(): Path? = liveTracePath
+
+    fun getLiveStatusPath(): Path? = liveStatusPath
 
     fun getDebugOutputPath(): Path {
         if (debugOutputPath != null) return debugOutputPath as Path
@@ -221,6 +230,20 @@ object TestDebugReporter {
         if (!debugOutput.exists()) {
             Files.createDirectories(debugOutput)
         }
+
+        val liveTraceRoot = testOutputDir ?: debugOutput
+        if (!liveTraceRoot.exists()) {
+            Files.createDirectories(liveTraceRoot)
+        }
+        liveTracePath = liveTraceRoot.resolve("maestro-live-trace.log")
+        liveStatusPath = liveTraceRoot.resolve("maestro-live-status.txt")
+        LiveTraceLogger.install(
+            traceFile = liveTracePath!!,
+            statusFile = liveStatusPath!!,
+        )
+        logger.info("Live trace path: {}", liveTracePath!!.absolutePathString())
+        logger.info("Live status path: {}", liveStatusPath!!.absolutePathString())
+
         debugOutputPath = debugOutput
         return debugOutput
     }

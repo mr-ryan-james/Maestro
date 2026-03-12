@@ -3,16 +3,14 @@ package maestro.cli.mcp.tools
 import io.modelcontextprotocol.kotlin.sdk.*
 import io.modelcontextprotocol.kotlin.sdk.server.RegisteredTool
 import kotlinx.serialization.json.*
+import maestro.cli.mcp.McpSessionRegistry
 import maestro.cli.session.MaestroSessionManager
+import maestro.cli.util.WorkingDirectory
 import maestro.orchestra.Orchestra
-import maestro.orchestra.yaml.YamlCommandReader
 import maestro.orchestra.util.Env.withEnv
 import maestro.orchestra.util.Env.withInjectedShellEnvVars
 import maestro.orchestra.util.Env.withDefaultEnvVars
 import kotlinx.coroutines.runBlocking
-import java.io.File
-import java.nio.file.Paths
-import maestro.cli.util.WorkingDirectory
 
 object RunFlowFilesTool {
     fun create(sessionManager: MaestroSessionManager): RegisteredTool {
@@ -26,6 +24,10 @@ object RunFlowFilesTool {
                             put("type", "string")
                             put("description", "The ID of the device to run the flows on")
                         }
+                        putJsonObject("session_id") {
+                            put("type", "string")
+                            put("description", "Optional hot session id returned by open_session")
+                        }
                         putJsonObject("flow_files") {
                             put("type", "string")
                             put("description", "Comma-separated file paths to YAML flow files to execute (e.g., 'flow1.yaml,flow2.yaml')")
@@ -38,18 +40,24 @@ object RunFlowFilesTool {
                             }
                         }
                     },
-                    required = listOf("device_id", "flow_files")
+                    required = listOf("flow_files")
                 )
             )
         ) { request ->
             try {
-                val deviceId = request.arguments["device_id"]?.jsonPrimitive?.content
-                val flowFilesString = request.arguments["flow_files"]?.jsonPrimitive?.content
+                val deviceId = ToolSupport.resolveDeviceId(request)
+                val flowFilesString = ToolSupport.requiredString(request, "flow_files")
                 val envParam = request.arguments["env"]?.jsonObject
-                
-                if (deviceId == null || flowFilesString == null) {
+
+                if (deviceId == null) {
                     return@RegisteredTool CallToolResult(
-                        content = listOf(TextContent("Both device_id and flow_files are required")),
+                        content = listOf(TextContent(ToolSupport.requireDeviceIdMessage())),
+                        isError = true
+                    )
+                }
+                if (flowFilesString == null) {
+                    return@RegisteredTool CallToolResult(
+                        content = listOf(TextContent("flow_files is required")),
                         isError = true
                     )
                 }
@@ -77,20 +85,14 @@ object RunFlowFilesTool {
                     )
                 }
                 
-                val result = sessionManager.newSession(
-                    host = null,
-                    port = null,
-                    driverHostPort = null,
-                    deviceId = deviceId,
-                    platform = null
-                ) { session ->
+                val result = ToolSupport.withSession(sessionManager, request, deviceId) { session ->
                     val orchestra = Orchestra(session.maestro)
                     val results = mutableListOf<Map<String, Any>>()
                     var totalCommands = 0
                     
                     for (fileObj in resolvedFiles) {
                         try {
-                            val commands = YamlCommandReader.readCommands(fileObj.toPath())
+                            val commands = CompiledFlowCache.readFlowFile(fileObj.toPath())
                             val finalEnv = env
                                 .withInjectedShellEnvVars()
                                 .withDefaultEnvVars(fileObj, deviceId)
@@ -123,6 +125,7 @@ object RunFlowFilesTool {
                     buildJsonObject {
                         put("success", results.all { (it["success"] as Boolean) })
                         put("device_id", deviceId)
+                        ToolSupport.optionalSessionId(request)?.let { put("session_id", it) }
                         put("total_files", flowFiles.size)
                         put("total_commands_executed", totalCommands)
                         putJsonArray("results") {
@@ -152,6 +155,7 @@ object RunFlowFilesTool {
                             "Some flows failed to execute")
                     }.toString()
                 }
+                McpSessionRegistry.invalidateHierarchy(ToolSupport.optionalSessionId(request))
                 
                 // Check if any flows failed and return isError accordingly
                 val anyFlowsFailed = result.contains("\"success\":false")                

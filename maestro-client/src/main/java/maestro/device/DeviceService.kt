@@ -1,5 +1,6 @@
 package maestro.device
 
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import dadb.Dadb
 import dadb.adbserver.AdbServer
 import maestro.device.util.AndroidEnvUtils
@@ -338,24 +339,89 @@ object DeviceService {
         return result
     }
 
-    fun listIOSDevices(): List<Device> {
-        val simctlList = try {
+    private fun listIOSDevices(): List<Device> {
+        val simctlList = runCatching {
             localSimulatorUtils.list()
-        } catch (ignored: Exception) {
+        }.getOrNull()
+
+        val simulatorDevices = if (simctlList != null) {
+            val runtimeNameByIdentifier = simctlList
+                .runtimes
+                .associate { it.identifier to it.name }
+
+            simctlList
+                .devices
+                .flatMap { runtime ->
+                    runtime.value
+                        .filter { it.isAvailable }
+                        .map { device(runtimeNameByIdentifier, runtime, it) }
+                }
+        } else {
+            emptyList()
+        }
+
+        val knownSimulatorIds = simulatorDevices.map {
+            when (it) {
+                is Device.Connected -> it.instanceId
+                is Device.AvailableForLaunch -> it.modelId
+            }
+        }.toSet()
+
+        val fallbackSimulators = listIOSFallbackSimulatorDevices()
+            .filter { it.instanceId !in knownSimulatorIds }
+
+        return simulatorDevices + fallbackSimulators + listIOSConnectedDevices()
+    }
+
+    private fun listIOSFallbackSimulatorDevices(): List<Device.Connected> {
+        val devicesRoot = File(System.getProperty("user.home"), "Library/Developer/CoreSimulator/Devices")
+        if (!devicesRoot.isDirectory) {
             return emptyList()
         }
 
-        val runtimeNameByIdentifier = simctlList
-            .runtimes
-            .associate { it.identifier to it.name }
+        val mapper = jacksonObjectMapper()
 
-        return simctlList
-            .devices
-            .flatMap { runtime ->
-                runtime.value
-                    .filter { it.isAvailable }
-                    .map { device(runtimeNameByIdentifier, runtime, it) }
-            } + listIOSConnectedDevices()
+        return devicesRoot.listFiles()
+            ?.mapNotNull { deviceDir ->
+                val plist = File(deviceDir, "device.plist")
+                if (!plist.isFile) {
+                    return@mapNotNull null
+                }
+
+                val process = runCatching {
+                    processBuilder(listOf("plutil", "-convert", "json", "-o", "-", plist.absolutePath))
+                        .redirectErrorStream(true)
+                        .start()
+                }.getOrNull() ?: return@mapNotNull null
+
+                val finished = runCatching {
+                    process.waitFor(5, TimeUnit.SECONDS)
+                }.getOrNull() ?: false
+                if (!finished || process.exitValue() != 0) {
+                    return@mapNotNull null
+                }
+
+                val json = process.inputStream.bufferedReader().use { it.readText() }
+                val node = runCatching { mapper.readTree(json) }.getOrNull() ?: return@mapNotNull null
+
+                if (node.path("isDeleted").asBoolean(false)) {
+                    return@mapNotNull null
+                }
+
+                val state = node.path("state").asInt(-1)
+                if (state != 3) {
+                    return@mapNotNull null
+                }
+
+                val name = node.path("name").asText(deviceDir.name)
+                Device.Connected(
+                    instanceId = deviceDir.name,
+                    description = "$name - CoreSimulator fallback - ${deviceDir.name}",
+                    platform = Platform.IOS,
+                    deviceType = Device.DeviceType.SIMULATOR
+                )
+            }
+            ?: emptyList()
     }
 
     fun listIOSConnectedDevices(): List<Device.Connected> {
@@ -363,7 +429,7 @@ object DeviceService {
 
         return connectedIphoneList.mapNotNull { device ->
             val udid = device.hardwareProperties?.udid
-            if (device.connectionProperties.tunnelState != DeviceCtlResponse.ConnectionProperties.CONNECTED || udid == null) {
+            if (device.connectionProperties?.tunnelState != DeviceCtlResponse.ConnectionProperties.CONNECTED || udid == null) {
                 return@mapNotNull null
             }
 

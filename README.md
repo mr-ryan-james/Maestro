@@ -80,6 +80,15 @@ The links below will guide you through the next steps.
 - [Run a sample flow](https://docs.maestro.dev/getting-started/run-a-sample-flow)
 - [Writing your first flow](https://docs.maestro.dev/getting-started/writing-your-first-flow)
 
+### Fast Local Fork Guide
+
+This fork also ships a faster local-first runtime for hot sessions, minimal-query checks, and live trace visibility. If you are migrating an existing local setup, start here:
+
+- [`docs/fast-path/README.md`](./docs/fast-path/README.md)
+- [`docs/fast-path/MIGRATION.md`](./docs/fast-path/MIGRATION.md)
+- [`docs/fast-path/OPERATIONS.md`](./docs/fast-path/OPERATIONS.md)
+- [`docs/fast-path/TROUBLESHOOTING.md`](./docs/fast-path/TROUBLESHOOTING.md)
+
 
 ---
 
@@ -130,5 +139,4 @@ Pricing for Maestro Cloud is completely transparent and can be found on the [pri
 ```
   Built with ❤️ by Maestro.dev
 ```
-
 

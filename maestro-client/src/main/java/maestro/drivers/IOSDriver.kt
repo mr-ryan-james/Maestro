@@ -22,8 +22,19 @@ package maestro.drivers
 import com.github.michaelbull.result.expect
 import device.IOSDevice
 import hierarchy.AXElement
+import hierarchy.AutomationNode as IOSAutomationNode
+import hierarchy.AutomationQueryResult as IOSAutomationQueryResult
+import hierarchy.AutomationSnapshotResult as IOSAutomationSnapshotResult
 import ios.IOSDeviceErrors
 import maestro.Capability
+import maestro.AutomationSelector
+import maestro.AutomationNode
+import maestro.AutomationQueryMatch
+import maestro.AutomationQueryRequest
+import maestro.AutomationQueryResult
+import maestro.AutomationSnapshot
+import maestro.AutomationSnapshotMode
+import maestro.AutomationSnapshotRequest
 import maestro.DeviceInfo
 import maestro.device.DeviceOrientation
 import maestro.Driver
@@ -52,6 +63,9 @@ import okio.Sink
 import okio.source
 import org.slf4j.LoggerFactory
 import util.XCRunnerCLIUtils
+import xcuitest.api.AutomationQueryRequest as IOSAutomationQueryRequest
+import xcuitest.api.AutomationQuerySelector as IOSAutomationQuerySelector
+import xcuitest.api.AutomationSnapshotRequest as IOSAutomationSnapshotRequest
 import java.io.File
 import java.net.SocketTimeoutException
 import kotlin.collections.set
@@ -173,6 +187,30 @@ class IOSDriver(
         }
     }
 
+    override fun automationSnapshot(request: AutomationSnapshotRequest): AutomationSnapshot {
+        return metrics.measured(
+            "operation",
+            mapOf(
+                "command" to "automationSnapshot",
+                "mode" to request.mode.name.lowercase(),
+            ),
+        ) {
+            runDeviceCall("automationSnapshot") {
+                iosDevice.automationSnapshot(request.toIosAutomationSnapshotRequest())
+                    .toAutomationSnapshot()
+            }
+        }
+    }
+
+    override fun queryAutomationElements(request: AutomationQueryRequest): AutomationQueryResult {
+        return metrics.measured("operation", mapOf("command" to "queryAutomationElements")) {
+            runDeviceCall("queryAutomationElements") {
+                iosDevice.queryAutomationElements(request.toIosAutomationQueryRequest())
+                    .toAutomationQueryResult()
+            }
+        }
+    }
+
     private fun viewHierarchy(excludeKeyboardElements: Boolean): TreeNode {
         val hierarchyResult = iosDevice.viewHierarchy(excludeKeyboardElements)
         if (hierarchyResult.depth > WARNING_MAX_DEPTH) {
@@ -216,6 +254,87 @@ class IOSDriver(
             focused = element.hasFocus,
             selected = element.selected,
             checked = checked,
+        )
+    }
+
+    private fun AutomationSnapshotRequest.toIosAutomationSnapshotRequest(): IOSAutomationSnapshotRequest {
+        return IOSAutomationSnapshotRequest(
+            appIds = emptyList(),
+            mode = mode.name.lowercase(),
+            flat = flat,
+            interactiveOnly = interactiveOnly,
+            fields = fields.toList(),
+            maxDepth = maxDepth,
+            includeStatusBars = includeStatusBars,
+            includeSafariWebViews = includeSafariWebViews,
+            excludeKeyboardElements = excludeKeyboardElements,
+            sinceToken = sinceToken,
+        )
+    }
+
+    private fun AutomationQueryRequest.toIosAutomationQueryRequest(): IOSAutomationQueryRequest {
+        return IOSAutomationQueryRequest(
+            appIds = emptyList(),
+            selectors = selectors.map { selector ->
+                IOSAutomationQuerySelector(
+                    id = selector.id,
+                    text = selector.text,
+                    index = selector.index,
+                    useFuzzyMatching = selector.useFuzzyMatching,
+                    enabled = selector.enabled,
+                    checked = selector.checked,
+                    focused = selector.focused,
+                    selected = selector.selected,
+                )
+            },
+            interactiveOnly = interactiveOnly,
+            fields = fields.toList(),
+            maxDepth = maxDepth,
+            includeStatusBars = includeStatusBars,
+            includeSafariWebViews = includeSafariWebViews,
+            excludeKeyboardElements = excludeKeyboardElements,
+        )
+    }
+
+    private fun IOSAutomationSnapshotResult.toAutomationSnapshot(): AutomationSnapshot {
+        return AutomationSnapshot(
+            source = source,
+            mode = when (mode.lowercase()) {
+                "full" -> AutomationSnapshotMode.FULL
+                else -> AutomationSnapshotMode.MINIMAL
+            },
+            changed = changed,
+            token = token,
+            nodeCount = nodeCount,
+            nodes = nodes.map { it.toAutomationNode() },
+        )
+    }
+
+    private fun IOSAutomationQueryResult.toAutomationQueryResult(): AutomationQueryResult {
+        return AutomationQueryResult(
+            source = source,
+            token = token,
+            matches = matches.map { match ->
+                AutomationQueryMatch(
+                    selectorIndex = match.selectorIndex,
+                    matchCount = match.matchCount,
+                    nodes = match.nodes.map { it.toAutomationNode() },
+                )
+            },
+        )
+    }
+
+    private fun IOSAutomationNode.toAutomationNode(): AutomationNode {
+        return AutomationNode(
+            id = id,
+            text = text,
+            bounds = bounds,
+            enabled = enabled,
+            checked = checked,
+            focused = focused,
+            selected = selected,
+            clickable = clickable,
+            depth = depth,
         )
     }
 
@@ -435,6 +554,9 @@ class IOSDriver(
     override fun openLink(link: String, appId: String?, autoVerify: Boolean, browser: Boolean) {
         metrics.measured("operation", mapOf("command" to "openLink", "appId" to appId.toString(), "autoVerify" to autoVerify.toString(), "browser" to browser.toString())) {
             iosDevice.openLink(link).expect {}
+            if (autoVerify) {
+                autoVerifyOpenLinkPrompt()
+            }
         }
     }
 
@@ -541,6 +663,66 @@ class IOSDriver(
         return runDeviceCall("isScreenStatic") { iosDevice.isScreenStatic() }
     }
 
+    private fun autoVerifyOpenLinkPrompt() {
+        val deadline = System.currentTimeMillis() + OPEN_LINK_AUTO_VERIFY_TIMEOUT_MS
+        val request = AutomationQueryRequest(
+            selectors = OPEN_LINK_AUTO_VERIFY_SELECTORS,
+            interactiveOnly = true,
+            includeStatusBars = true,
+            excludeKeyboardElements = true,
+        )
+
+        while (System.currentTimeMillis() <= deadline) {
+            val confirmation = runCatching {
+                queryAutomationElements(request)
+                    .matches
+                    .asSequence()
+                    .sortedBy { it.selectorIndex }
+                    .flatMap { it.nodes.asSequence() }
+                    .mapNotNull { node ->
+                        automationNodeCenter(node)?.let { center ->
+                            node.text to center
+                        }
+                    }
+                    .firstOrNull()
+            }.getOrElse { error ->
+                LOGGER.warn("Failed to auto-verify iOS openLink confirmation prompt", error)
+                return
+            }
+
+            if (confirmation != null) {
+                val (buttonText, center) = confirmation
+                LOGGER.info("Auto-verifying iOS openLink prompt by tapping {}", buttonText)
+                tap(center)
+                waitForAppToSettle(null, appId, OPEN_LINK_AUTO_VERIFY_TIMEOUT_MS.toInt())
+                return
+            }
+
+            Thread.sleep(OPEN_LINK_AUTO_VERIFY_POLL_INTERVAL_MS)
+        }
+
+        LOGGER.info("No iOS openLink confirmation prompt detected during autoVerify window")
+    }
+
+    private fun automationNodeCenter(node: AutomationNode): Point? {
+        val bounds = node.bounds ?: return null
+        val values = bounds
+            .replace("][", ",")
+            .removePrefix("[")
+            .removeSuffix("]")
+            .split(",")
+            .mapNotNull { it.toIntOrNull() }
+
+        if (values.size != 4) {
+            return null
+        }
+
+        return Point(
+            x = values[0] + ((values[2] - values[0]) / 2),
+            y = values[1] + ((values[3] - values[1]) / 2),
+        )
+    }
+
     private fun <T> runDeviceCall(callName: String, call: () -> T): T {
         return try {
             call()
@@ -592,6 +774,14 @@ class IOSDriver(
             ELEMENT_TYPE_CHECKBOX,
             ELEMENT_TYPE_SWITCH,
             ELEMENT_TYPE_TOGGLE,
+        )
+
+        private const val OPEN_LINK_AUTO_VERIFY_TIMEOUT_MS = 5_000L
+        private const val OPEN_LINK_AUTO_VERIFY_POLL_INTERVAL_MS = 150L
+        private val OPEN_LINK_AUTO_VERIFY_SELECTORS = listOf(
+            AutomationSelector(text = "Open", useFuzzyMatching = false, enabled = true),
+            AutomationSelector(text = "Continue", useFuzzyMatching = false, enabled = true),
+            AutomationSelector(text = "Allow", useFuzzyMatching = false, enabled = true),
         )
 
         private const val SCREEN_SETTLE_TIMEOUT_MS: Long = 3000

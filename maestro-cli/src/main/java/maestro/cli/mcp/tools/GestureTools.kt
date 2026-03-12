@@ -23,20 +23,28 @@ object HideKeyboardTool {
                             put("type", "string")
                             put("description", "The ID of the device to dismiss the keyboard on")
                         }
+                        putJsonObject("session_id") {
+                            put("type", "string")
+                            put("description", "Optional hot session id returned by open_session")
+                        }
                     },
-                    required = listOf("device_id"),
+                    required = emptyList(),
                 ),
             ),
         ) { request ->
-            val deviceId = ToolSupport.requiredString(request, "device_id")
+            val deviceId = ToolSupport.resolveDeviceId(request)
             if (deviceId == null) {
-                return@RegisteredTool CallToolResult(listOf(TextContent("device_id is required")), isError = true)
+                return@RegisteredTool CallToolResult(
+                    listOf(TextContent(ToolSupport.requireDeviceIdMessage())),
+                    isError = true,
+                )
             }
 
             CallToolResult(
                 content = listOf(TextContent(
                     ToolSupport.runCommand(
                         sessionManager = sessionManager,
+                        request = request,
                         deviceId = deviceId,
                         command = HideKeyboardCommand(),
                         message = "Keyboard hidden successfully",
@@ -59,20 +67,28 @@ object ScrollTool {
                             put("type", "string")
                             put("description", "The ID of the device to scroll on")
                         }
+                        putJsonObject("session_id") {
+                            put("type", "string")
+                            put("description", "Optional hot session id returned by open_session")
+                        }
                     },
-                    required = listOf("device_id"),
+                    required = emptyList(),
                 ),
             ),
         ) { request ->
-            val deviceId = ToolSupport.requiredString(request, "device_id")
+            val deviceId = ToolSupport.resolveDeviceId(request)
             if (deviceId == null) {
-                return@RegisteredTool CallToolResult(listOf(TextContent("device_id is required")), isError = true)
+                return@RegisteredTool CallToolResult(
+                    listOf(TextContent(ToolSupport.requireDeviceIdMessage())),
+                    isError = true,
+                )
             }
 
             CallToolResult(
                 content = listOf(TextContent(
                     ToolSupport.runCommand(
                         sessionManager = sessionManager,
+                        request = request,
                         deviceId = deviceId,
                         command = ScrollCommand(),
                         message = "Scroll executed successfully",
@@ -92,6 +108,10 @@ object SwipeTool {
                 inputSchema = Tool.Input(
                     properties = buildJsonObject {
                         putJsonObject("device_id") { put("type", "string"); put("description", "The ID of the device to swipe on") }
+                        putJsonObject("session_id") {
+                            put("type", "string")
+                            put("description", "Optional hot session id returned by open_session")
+                        }
                         putJsonObject("direction") { put("type", "string"); put("description", "Swipe direction: up, down, left, or right") }
                         putJsonObject("duration_ms") { put("type", "integer"); put("description", "Swipe duration in milliseconds") }
                         putJsonObject("wait_to_settle_timeout_ms") { put("type", "integer"); put("description", "Optional settle timeout in milliseconds") }
@@ -106,13 +126,16 @@ object SwipeTool {
                         putJsonObject("index") { put("type", "integer") }
                         putJsonObject("use_fuzzy_matching") { put("type", "boolean") }
                     },
-                    required = listOf("device_id"),
+                    required = emptyList(),
                 ),
             ),
         ) { request ->
-            val deviceId = ToolSupport.requiredString(request, "device_id")
+            val deviceId = ToolSupport.resolveDeviceId(request)
             if (deviceId == null) {
-                return@RegisteredTool CallToolResult(listOf(TextContent("device_id is required")), isError = true)
+                return@RegisteredTool CallToolResult(
+                    listOf(TextContent(ToolSupport.requireDeviceIdMessage())),
+                    isError = true,
+                )
             }
 
             val direction = ToolSupport.parseSwipeDirection(ToolSupport.optionalString(request, "direction"))
@@ -151,6 +174,7 @@ object SwipeTool {
                 content = listOf(TextContent(
                     ToolSupport.runCommand(
                         sessionManager = sessionManager,
+                        request = request,
                         deviceId = deviceId,
                         command = command,
                         message = "Swipe executed successfully",
@@ -174,6 +198,10 @@ object ScrollUntilVisibleTool {
                 inputSchema = Tool.Input(
                     properties = buildJsonObject {
                         putJsonObject("device_id") { put("type", "string"); put("description", "The ID of the device to scroll on") }
+                        putJsonObject("session_id") {
+                            put("type", "string")
+                            put("description", "Optional hot session id returned by open_session")
+                        }
                         putJsonObject("direction") { put("type", "string"); put("description", "Scroll direction: up, down, left, or right") }
                         putJsonObject("text") { put("type", "string") }
                         putJsonObject("id") { put("type", "string") }
@@ -189,15 +217,18 @@ object ScrollUntilVisibleTool {
                         putJsonObject("center_element") { put("type", "boolean") }
                         putJsonObject("wait_to_settle_timeout_ms") { put("type", "integer") }
                     },
-                    required = listOf("device_id", "direction"),
+                    required = listOf("direction"),
                 ),
             ),
         ) { request ->
-            val deviceId = ToolSupport.requiredString(request, "device_id")
+            val deviceId = ToolSupport.resolveDeviceId(request)
             val direction = ToolSupport.parseScrollDirection(ToolSupport.requiredString(request, "direction"))
             val selector = ToolSupport.buildSelector(request, requireSelector = true)
             if (deviceId == null) {
-                return@RegisteredTool CallToolResult(listOf(TextContent("device_id is required")), isError = true)
+                return@RegisteredTool CallToolResult(
+                    listOf(TextContent(ToolSupport.requireDeviceIdMessage())),
+                    isError = true,
+                )
             }
             if (direction == null) {
                 return@RegisteredTool CallToolResult(listOf(TextContent("direction must be one of up, down, left, right")), isError = true)
@@ -223,6 +254,7 @@ object ScrollUntilVisibleTool {
                 content = listOf(TextContent(
                     ToolSupport.runCommand(
                         sessionManager = sessionManager,
+                        request = request,
                         deviceId = deviceId,
                         command = command,
                         message = "Scroll-until-visible executed successfully",
@@ -246,15 +278,22 @@ object WaitForAnimationToEndTool {
                 inputSchema = Tool.Input(
                     properties = buildJsonObject {
                         putJsonObject("device_id") { put("type", "string"); put("description", "The ID of the device to wait on") }
+                        putJsonObject("session_id") {
+                            put("type", "string")
+                            put("description", "Optional hot session id returned by open_session")
+                        }
                         putJsonObject("timeout_ms") { put("type", "integer"); put("description", "Optional timeout in milliseconds") }
                     },
-                    required = listOf("device_id"),
+                    required = emptyList(),
                 ),
             ),
         ) { request ->
-            val deviceId = ToolSupport.requiredString(request, "device_id")
+            val deviceId = ToolSupport.resolveDeviceId(request)
             if (deviceId == null) {
-                return@RegisteredTool CallToolResult(listOf(TextContent("device_id is required")), isError = true)
+                return@RegisteredTool CallToolResult(
+                    listOf(TextContent(ToolSupport.requireDeviceIdMessage())),
+                    isError = true,
+                )
             }
             val timeoutMs = ToolSupport.optionalLong(request, "timeout_ms")
             val command = maestro.orchestra.WaitForAnimationToEndCommand(timeoutMs)
@@ -263,6 +302,7 @@ object WaitForAnimationToEndTool {
                 content = listOf(TextContent(
                     ToolSupport.runCommand(
                         sessionManager = sessionManager,
+                        request = request,
                         deviceId = deviceId,
                         command = command,
                         message = "Animation wait completed successfully",

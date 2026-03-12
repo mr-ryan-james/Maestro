@@ -31,6 +31,7 @@ import maestro.cli.device.PickDeviceInteractor
 import maestro.cli.driver.DriverBuilder
 import maestro.cli.driver.RealIOSDeviceDriver
 import maestro.cli.util.PrintUtils
+import maestro.debuglog.LiveTraceLogger
 import maestro.device.Platform
 import maestro.utils.CliInsights
 import maestro.cli.util.ScreenReporter
@@ -79,6 +80,42 @@ object MaestroSessionManager {
         executionPlan: WorkspaceExecutionPlanner.ExecutionPlan? = null,
         block: (MaestroSession) -> T,
     ): T {
+        val managedSession = openSession(
+            host = host,
+            port = port,
+            driverHostPort = driverHostPort,
+            deviceId = deviceId,
+            teamId = teamId,
+            platform = platform,
+            isStudio = isStudio,
+            isHeadless = isHeadless,
+            screenSize = screenSize,
+            reinstallDriver = reinstallDriver,
+            deviceIndex = deviceIndex,
+            executionPlan = executionPlan,
+        )
+
+        return try {
+            block(managedSession.session)
+        } finally {
+            managedSession.close("finally")
+        }
+    }
+
+    fun openSession(
+        host: String?,
+        port: Int?,
+        driverHostPort: Int?,
+        deviceId: String?,
+        teamId: String? = null,
+        platform: String? = null,
+        isStudio: Boolean = false,
+        isHeadless: Boolean = false,
+        screenSize: String? = null,
+        reinstallDriver: Boolean = true,
+        deviceIndex: Int? = null,
+        executionPlan: WorkspaceExecutionPlanner.ExecutionPlan? = null,
+    ): ManagedSession {
         val selectedDevice = selectDevice(
             host = host,
             port = port,
@@ -89,6 +126,10 @@ object MaestroSessionManager {
             deviceIndex = deviceIndex,
         )
         val sessionId = UUID.randomUUID().toString()
+        LiveTraceLogger.note(
+            event = "SESSION_OPEN",
+            detail = "sessionId=$sessionId platform=${selectedDevice.platform} deviceId=${selectedDevice.device?.instanceId ?: selectedDevice.deviceId ?: "unknown"} driverHostPort=${driverHostPort ?: defaultXcTestPort} reinstallDriver=$reinstallDriver",
+        )
 
         val heartbeatFuture = executor.scheduleAtFixedRate(
             {
@@ -135,11 +176,19 @@ object MaestroSessionManager {
                 logger.info("Cleanup already completed for session id={}, source={}", sessionId, source)
             } else {
                 logger.info("Cleanup started for session id={}, source={}", sessionId, source)
+                LiveTraceLogger.note(
+                    event = "SESSION_CLEANUP_START",
+                    detail = "sessionId=$sessionId source=$source",
+                )
                 heartbeatFuture.cancel(true)
                 SessionStore.delete(sessionId, selectedDevice.platform)
                 runCatching { ScreenReporter.reportMaxDepth() }
                 runCatching { session.close() }
                 logger.info("Cleanup finished for session id={}, source={}", sessionId, source)
+                LiveTraceLogger.note(
+                    event = "SESSION_CLEANUP_END",
+                    detail = "sessionId=$sessionId source=$source",
+                )
             }
         }
 
@@ -148,10 +197,13 @@ object MaestroSessionManager {
         }
         Runtime.getRuntime().addShutdownHook(shutdownHook)
 
-        return try {
-            block(session)
-        } finally {
-            cleanupSession("finally")
+        return ManagedSession(
+            sessionId = sessionId,
+            session = session,
+            platform = selectedDevice.platform,
+            deviceId = selectedDevice.device?.instanceId ?: selectedDevice.deviceId,
+        ) { source ->
+            cleanupSession(source)
             runCatching { Runtime.getRuntime().removeShutdownHook(shutdownHook) }
         }
     }
@@ -489,6 +541,18 @@ object MaestroSessionManager {
 
         fun close() {
             maestro.close()
+        }
+    }
+
+    class ManagedSession(
+        val sessionId: String,
+        val session: MaestroSession,
+        val platform: Platform,
+        val deviceId: String?,
+        private val cleanup: (String) -> Unit,
+    ) {
+        fun close(source: String = "manual") {
+            cleanup(source)
         }
     }
 }

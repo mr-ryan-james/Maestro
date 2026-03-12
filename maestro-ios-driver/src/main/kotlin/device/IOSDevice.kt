@@ -20,8 +20,14 @@
 package device
 
 import com.github.michaelbull.result.Result
+import hierarchy.AutomationQueryResult
+import hierarchy.AutomationSnapshotResult
 import hierarchy.ViewHierarchy
+import hierarchy.query
+import hierarchy.toAutomationSnapshotResult
 import xcuitest.api.DeviceInfo
+import xcuitest.api.AutomationQueryRequest
+import xcuitest.api.AutomationSnapshotRequest
 import okio.Sink
 import java.io.InputStream
 
@@ -154,6 +160,29 @@ interface IOSDevice : AutoCloseable {
     fun eraseText(charactersToErase: Int)
 
     fun addMedia(path: String)
+
+    fun automationSnapshot(
+        request: AutomationSnapshotRequest = AutomationSnapshotRequest(),
+    ): AutomationSnapshotResult {
+        return viewHierarchy(request.excludeKeyboardElements).toAutomationSnapshotResult(request)
+    }
+
+    fun queryAutomationElements(
+        request: AutomationQueryRequest,
+    ): AutomationQueryResult {
+        val snapshotRequest = AutomationSnapshotRequest(
+            appIds = request.appIds,
+            mode = "minimal",
+            flat = true,
+            interactiveOnly = request.interactiveOnly,
+            fields = request.fields,
+            maxDepth = request.maxDepth,
+            includeStatusBars = request.includeStatusBars,
+            includeSafariWebViews = request.includeSafariWebViews,
+            excludeKeyboardElements = request.excludeKeyboardElements,
+        )
+        return automationSnapshot(snapshotRequest).query(request)
+    }
 }
 
 interface IOSScreenRecording : AutoCloseable

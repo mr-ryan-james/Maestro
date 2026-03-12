@@ -3,6 +3,7 @@ package maestro.cli.mcp.tools
 import io.modelcontextprotocol.kotlin.sdk.*
 import io.modelcontextprotocol.kotlin.sdk.server.RegisteredTool
 import kotlinx.serialization.json.*
+import maestro.cli.mcp.McpSessionRegistry
 import maestro.cli.session.MaestroSessionManager
 import okio.Buffer
 import java.util.Base64
@@ -22,28 +23,25 @@ object TakeScreenshotTool {
                             put("type", "string")
                             put("description", "The ID of the device to take a screenshot from")
                         }
+                        putJsonObject("session_id") {
+                            put("type", "string")
+                            put("description", "Optional hot session id returned by open_session")
+                        }
                     },
-                    required = listOf("device_id")
+                    required = emptyList()
                 )
             )
         ) { request ->
             try {
-                val deviceId = request.arguments["device_id"]?.jsonPrimitive?.content
-                
+                val deviceId = ToolSupport.resolveDeviceId(request)
                 if (deviceId == null) {
                     return@RegisteredTool CallToolResult(
-                        content = listOf(TextContent("device_id is required")),
+                        content = listOf(TextContent(ToolSupport.requireDeviceIdMessage())),
                         isError = true
                     )
                 }
                 
-                val result = sessionManager.newSession(
-                    host = null,
-                    port = null,
-                    driverHostPort = null,
-                    deviceId = deviceId,
-                    platform = null
-                ) { session ->
+                val result = ToolSupport.withSession(sessionManager, request, deviceId) { session ->
                     val buffer = Buffer()
                     session.maestro.takeScreenshot(buffer, true)
                     val pngBytes = buffer.readByteArray()
@@ -57,6 +55,7 @@ object TakeScreenshotTool {
                     val base64 = Base64.getEncoder().encodeToString(jpegBytes)
                     base64
                 }
+                McpSessionRegistry.invalidateHierarchy(ToolSupport.optionalSessionId(request))
                 
                 val imageContent = ImageContent(
                     data = result,

@@ -36,6 +36,9 @@ data class MaestroCommand(
     val backPressCommand: BackPressCommand? = null,
     @Deprecated("Use assertConditionCommand") val assertCommand: AssertCommand? = null,
     val assertConditionCommand: AssertConditionCommand? = null,
+    val dismissKnownOverlaysCommand: DismissKnownOverlaysCommand? = null,
+    val tapFirstVisibleNowCommand: TapFirstVisibleNowCommand? = null,
+    val assertNoneVisibleNowCommand: AssertNoneVisibleNowCommand? = null,
     val assertScreenshotCommand: AssertScreenshotCommand? = null,
     val assertNoDefectsWithAICommand: AssertNoDefectsWithAICommand? = null,
     val assertWithAICommand: AssertWithAICommand? = null,
@@ -84,6 +87,9 @@ data class MaestroCommand(
         backPressCommand = command as? BackPressCommand,
         assertCommand = command as? AssertCommand,
         assertConditionCommand = command as? AssertConditionCommand,
+        dismissKnownOverlaysCommand = command as? DismissKnownOverlaysCommand,
+        tapFirstVisibleNowCommand = command as? TapFirstVisibleNowCommand,
+        assertNoneVisibleNowCommand = command as? AssertNoneVisibleNowCommand,
         assertNoDefectsWithAICommand = command as? AssertNoDefectsWithAICommand,
         assertWithAICommand = command as? AssertWithAICommand,
         extractTextWithAICommand = command as? ExtractTextWithAICommand,
@@ -132,6 +138,9 @@ data class MaestroCommand(
         backPressCommand != null -> backPressCommand
         assertCommand != null -> assertCommand
         assertConditionCommand != null -> assertConditionCommand
+        dismissKnownOverlaysCommand != null -> dismissKnownOverlaysCommand
+        tapFirstVisibleNowCommand != null -> tapFirstVisibleNowCommand
+        assertNoneVisibleNowCommand != null -> assertNoneVisibleNowCommand
         assertNoDefectsWithAICommand != null -> assertNoDefectsWithAICommand
         assertWithAICommand != null -> assertWithAICommand
         extractTextWithAICommand != null -> extractTextWithAICommand

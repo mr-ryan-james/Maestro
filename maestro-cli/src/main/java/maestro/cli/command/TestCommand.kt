@@ -321,6 +321,12 @@ class TestCommand : Callable<Int> {
         // Update TestDebugReporter with the resolved test output directory
         TestDebugReporter.updateTestOutputDir(resolvedTestOutputDir)
         val debugOutputPath = TestDebugReporter.getDebugOutputPath()
+        TestDebugReporter.getLiveTracePath()?.let {
+            PrintUtils.message("Live trace -> ${it.absolutePathString()}")
+        }
+        TestDebugReporter.getLiveStatusPath()?.let {
+            PrintUtils.message("Live status -> ${it.absolutePathString()}")
+        }
 
         // Track test execution start
         val flowCount = executionPlan.flowsToRun.size

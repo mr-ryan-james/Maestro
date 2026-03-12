@@ -22,35 +22,35 @@ object InspectViewHierarchyTool {
                             put("type", "string")
                             put("description", "The ID of the device to get hierarchy from")
                         }
+                        putJsonObject("session_id") {
+                            put("type", "string")
+                            put("description", "Optional hot session id returned by open_session")
+                        }
+                        putJsonObject("refresh") {
+                            put("type", "boolean")
+                            put("description", "Refresh hierarchy instead of using cached session hierarchy")
+                        }
                     },
-                    required = listOf("device_id")
+                    required = emptyList()
                 )
             )
         ) { request ->
             try {
-                val deviceId = request.arguments["device_id"]?.jsonPrimitive?.content
-                
+                val deviceId = ToolSupport.resolveDeviceId(request)
                 if (deviceId == null) {
                     return@RegisteredTool CallToolResult(
-                        content = listOf(TextContent("device_id is required")),
+                        content = listOf(TextContent(ToolSupport.requireDeviceIdMessage())),
                         isError = true
                     )
                 }
                 
-                val result = sessionManager.newSession(
-                    host = null,
-                    port = null,
-                    driverHostPort = null,
+                val viewHierarchy = ToolSupport.loadViewHierarchy(
+                    sessionManager = sessionManager,
+                    request = request,
                     deviceId = deviceId,
-                    platform = null
-                ) { session ->
-                    val maestro = session.maestro
-                    val viewHierarchy = maestro.viewHierarchy()
-                    val tree = viewHierarchy.root
-                    
-                    // Return CSV format (original format for compatibility)
-                    ViewHierarchyFormatters.extractCsvOutput(tree)
-                }
+                    refresh = ToolSupport.optionalBoolean(request, "refresh") ?: false,
+                )
+                val result = ViewHierarchyFormatters.extractCsvOutput(viewHierarchy.root)
                 
                 CallToolResult(content = listOf(TextContent(result)))
             } catch (e: Exception) {

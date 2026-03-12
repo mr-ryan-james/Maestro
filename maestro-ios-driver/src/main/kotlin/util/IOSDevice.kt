@@ -9,19 +9,19 @@ enum class IOSDeviceType {
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class DeviceCtlResponse(
-    val result: Result
+    val result: Result = Result()
 ) {
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class Result(
-        val devices: List<Device>
+        val devices: List<Device> = emptyList()
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class Device(
-        val identifier: String,
+        val identifier: String = "",
         val deviceProperties: DeviceProperties?,
         val hardwareProperties: HardwareProperties?,
-        val connectionProperties: ConnectionProperties,
+        val connectionProperties: ConnectionProperties? = null,
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)

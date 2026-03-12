@@ -2,7 +2,10 @@ package xcuitest
 
 import com.fasterxml.jackson.core.JsonProcessingException
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import hierarchy.AutomationQueryResult
+import hierarchy.AutomationSnapshotResult
 import hierarchy.ViewHierarchy
+import maestro.debuglog.LiveTraceLogger
 import maestro.utils.HttpClient
 import maestro.utils.network.XCUITestServerError
 import okhttp3.*
@@ -42,6 +45,10 @@ class XCTestDriverClient(
     fun restartXCTestRunner() {
         if(reinstallDriver) {
             logger.trace("Restarting XCTest Runner (uninstalling, installing and starting)")
+            LiveTraceLogger.note(
+                event = "XCTEST_DRIVER_RESTART",
+                detail = "reinstallDriver=true action=uninstall_then_start",
+            )
             installer.uninstall()
             logger.trace("XCTest Runner uninstalled, will install and start it")
         }
@@ -52,8 +59,27 @@ class XCTestDriverClient(
     private val mapper = jacksonObjectMapper()
 
     fun viewHierarchy(installedApps: Set<String>, excludeKeyboardElements: Boolean): ViewHierarchy {
-        val responseString = executeViewHierarchyWithRetry(installedApps, excludeKeyboardElements)
+        val responseString = executeRetriableAXRequest(
+            pathSegment = "viewHierarchy",
+            body = ViewHierarchyRequest(installedApps, excludeKeyboardElements),
+        )
         return mapper.readValue(responseString, ViewHierarchy::class.java)
+    }
+
+    fun automationSnapshot(request: AutomationSnapshotRequest): AutomationSnapshotResult {
+        val responseString = executeRetriableAXRequest(
+            pathSegment = "automationSnapshot",
+            body = request,
+        )
+        return mapper.readValue(responseString, AutomationSnapshotResult::class.java)
+    }
+
+    fun queryAutomationElements(request: AutomationQueryRequest): AutomationQueryResult {
+        val responseString = executeRetriableAXRequest(
+            pathSegment = "queryAutomationElements",
+            body = request,
+        )
+        return mapper.readValue(responseString, AutomationQueryResult::class.java)
     }
 
     fun screenshot(compressed: Boolean): ByteArray {
@@ -180,9 +206,17 @@ class XCTestDriverClient(
 
     fun close() {
         if (::client.isInitialized) {
+            LiveTraceLogger.note(
+                event = "XCTEST_DRIVER_CLOSE",
+                detail = "requesting graceful shutdown",
+            )
             runCatching { requestRunnerShutdown() }
                 .onFailure {
                     logger.warn("Graceful XCTest shutdown request failed", it)
+                    LiveTraceLogger.note(
+                        event = "XCTEST_DRIVER_CLOSE_FAILURE",
+                        detail = it.message,
+                    )
                 }
         }
         installer.close()
@@ -201,9 +235,17 @@ class XCTestDriverClient(
             .url(httpUrl)
             .post(bodyData)
 
-        return okHttpClient
-            .newCall(requestBuilder.build())
-            .execute().use { processResponse(it, httpUrl.toString()) }
+        return try {
+            okHttpClient
+                .newCall(requestBuilder.build())
+                .execute().use { processResponse(it, httpUrl.toString()) }
+        } catch (exception: Exception) {
+            LiveTraceLogger.note(
+                event = "XCTEST_DRIVER_REQUEST_FAILURE",
+                detail = "url=${httpUrl} message=${exception.message}",
+            )
+            throw exception
+        }
     }
 
     private fun executeJsonRequest(httpUrl: HttpUrl): ByteArray {
@@ -212,17 +254,25 @@ class XCTestDriverClient(
             .url(httpUrl)
             .build()
 
-        return okHttpClient
-            .newCall(request)
-            .execute().use {
-                val bytes = it.body?.bytes() ?: ByteArray(0)
-                if (!it.isSuccessful) {
-                    //handle exception
-                    val responseBodyAsString = String(bytes)
-                    handleExceptions(it.code, request.url.pathSegments.first(), responseBodyAsString)
+        return try {
+            okHttpClient
+                .newCall(request)
+                .execute().use {
+                    val bytes = it.body?.bytes() ?: ByteArray(0)
+                    if (!it.isSuccessful) {
+                        //handle exception
+                        val responseBodyAsString = String(bytes)
+                        handleExceptions(it.code, request.url.pathSegments.first(), responseBodyAsString)
+                    }
+                    bytes
                 }
-                bytes
-            }
+        } catch (exception: Exception) {
+            LiveTraceLogger.note(
+                event = "XCTEST_DRIVER_REQUEST_FAILURE",
+                detail = "url=${httpUrl} message=${exception.message}",
+            )
+            throw exception
+        }
     }
 
     private fun executeJsonRequest(pathSegment: String, body: Any): String {
@@ -234,9 +284,17 @@ class XCTestDriverClient(
             .url(client.xctestAPIBuilder(pathSegment).build())
             .post(bodyData)
 
-        return okHttpClient
-            .newCall(requestBuilder.build())
-            .execute().use { processResponse(it, pathSegment) }
+        return try {
+            okHttpClient
+                .newCall(requestBuilder.build())
+                .execute().use { processResponse(it, pathSegment) }
+        } catch (exception: Exception) {
+            LiveTraceLogger.note(
+                event = "XCTEST_DRIVER_REQUEST_FAILURE",
+                detail = "path=$pathSegment message=${exception.message}",
+            )
+            throw exception
+        }
     }
 
     private fun executeJsonRequest(pathSegment: String): String {
@@ -244,9 +302,17 @@ class XCTestDriverClient(
             .url(client.xctestAPIBuilder(pathSegment).build())
             .get()
 
-        return okHttpClient
-            .newCall(requestBuilder.build())
-            .execute().use { processResponse(it, pathSegment) }
+        return try {
+            okHttpClient
+                .newCall(requestBuilder.build())
+                .execute().use { processResponse(it, pathSegment) }
+        } catch (exception: Exception) {
+            LiveTraceLogger.note(
+                event = "XCTEST_DRIVER_REQUEST_FAILURE",
+                detail = "path=$pathSegment message=${exception.message}",
+            )
+            throw exception
+        }
     }
 
     private fun processResponse(response: Response, url: String): String {
@@ -316,15 +382,14 @@ class XCTestDriverClient(
         }
     }
 
-    private fun executeViewHierarchyWithRetry(
-        installedApps: Set<String>,
-        excludeKeyboardElements: Boolean,
+    private fun executeRetriableAXRequest(
+        pathSegment: String,
+        body: Any,
     ): String {
-        val request = ViewHierarchyRequest(installedApps, excludeKeyboardElements)
         var attempt = 1
         while (true) {
             try {
-                return executeJsonRequest("viewHierarchy", request)
+                return executeJsonRequest(pathSegment, body)
             } catch (error: Throwable) {
                 val classifierText = retryClassifierText(error)
                 val retryToken = retriableAXToken(classifierText)

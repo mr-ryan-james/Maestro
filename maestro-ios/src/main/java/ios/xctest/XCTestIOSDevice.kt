@@ -2,6 +2,8 @@ package ios.xctest
 
 import com.github.michaelbull.result.Result
 import device.IOSDevice
+import hierarchy.AutomationQueryResult
+import hierarchy.AutomationSnapshotResult
 import hierarchy.ViewHierarchy
 import ios.IOSDeviceErrors
 import device.IOSScreenRecording
@@ -12,6 +14,8 @@ import okio.Sink
 import okio.buffer
 import org.slf4j.LoggerFactory
 import xcuitest.XCTestDriverClient
+import xcuitest.api.AutomationQueryRequest
+import xcuitest.api.AutomationSnapshotRequest
 import java.io.InputStream
 
 class XCTestIOSDevice(
@@ -39,6 +43,18 @@ class XCTestIOSDevice(
             val viewHierarchy = client.viewHierarchy(installedApps = emptySet(), excludeKeyboardElements)
             DepthTracker.trackDepth(viewHierarchy.depth)
             viewHierarchy
+        }
+    }
+
+    override fun automationSnapshot(request: AutomationSnapshotRequest): AutomationSnapshotResult {
+        return execute {
+            client.automationSnapshot(request)
+        }
+    }
+
+    override fun queryAutomationElements(request: AutomationQueryRequest): AutomationQueryResult {
+        return execute {
+            client.queryAutomationElements(request)
         }
     }
 

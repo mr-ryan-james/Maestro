@@ -1,4 +1,5 @@
 import FlyingFox
+import CryptoKit
 import XCTest
 import os
 import MaestroDriverLib
@@ -29,7 +30,12 @@ struct ViewHierarchyHandler: HTTPHandler {
                 return HTTPResponse(statusCode: .ok, body: body)
             }
             NSLog("[Start] View hierarchy snapshot for \(foregroundApp)")
-            let appViewHierarchy = try await getAppViewHierarchy(foregroundApp: foregroundApp, excludeKeyboardElements: requestBody.excludeKeyboardElements)
+            let appViewHierarchy = try await getAppViewHierarchy(
+                foregroundApp: foregroundApp,
+                excludeKeyboardElements: requestBody.excludeKeyboardElements,
+                includeStatusBars: true,
+                includeSafariWebViews: true
+            )
             let viewHierarchy = ViewHierarchy.init(axElement: appViewHierarchy, depth: appViewHierarchy.depth())
             
             NSLog("[Done] View hierarchy snapshot for \(foregroundApp) ")
@@ -44,18 +50,90 @@ struct ViewHierarchyHandler: HTTPHandler {
         }
     }
 
-    func getAppViewHierarchy(foregroundApp: XCUIApplication, excludeKeyboardElements: Bool) async throws -> AXElement {
+    func automationSnapshotResponse(_ requestBody: AutomationSnapshotRequest) async throws -> AutomationSnapshotResponse {
+        let hierarchy = try await resolveAutomationHierarchy(
+            excludeKeyboardElements: requestBody.excludeKeyboardElements,
+            includeStatusBars: requestBody.includeStatusBars,
+            includeSafariWebViews: requestBody.includeSafariWebViews
+        )
+        let fields = Set(requestBody.fields.isEmpty ? defaultAutomationFields : requestBody.fields)
+        let nodes = hierarchy.flattenAutomationNodes(
+            fields: fields,
+            interactiveOnly: requestBody.interactiveOnly,
+            maxDepth: requestBody.maxDepth
+        )
+        let token = automationToken(nodes)
+        let changed = requestBody.sinceToken == nil || requestBody.sinceToken != token
+        return AutomationSnapshotResponse(
+            source: "ios_runner",
+            mode: requestBody.mode,
+            changed: changed,
+            token: token,
+            nodeCount: nodes.count,
+            nodes: changed ? nodes : []
+        )
+    }
+
+    func automationQueryResponse(_ requestBody: AutomationQueryRequest) async throws -> AutomationQueryResponse {
+        let hierarchy = try await resolveAutomationHierarchy(
+            excludeKeyboardElements: requestBody.excludeKeyboardElements,
+            includeStatusBars: requestBody.includeStatusBars,
+            includeSafariWebViews: requestBody.includeSafariWebViews
+        )
+        let fields = Set(requestBody.fields.isEmpty ? defaultAutomationFields : requestBody.fields)
+        let nodes = hierarchy.flattenAutomationNodes(
+            fields: fields,
+            interactiveOnly: requestBody.interactiveOnly,
+            maxDepth: requestBody.maxDepth
+        )
+        let token = automationToken(nodes)
+        let matches = requestBody.selectors.enumerated().map { index, selector in
+            let filtered = nodes.filter { selector.matches(node: $0) }
+            let selectedNodes: [AutomationNode]
+            if let selectorIndex = selector.index {
+                if selectorIndex >= 0, selectorIndex < filtered.count {
+                    selectedNodes = [filtered[selectorIndex]]
+                } else {
+                    selectedNodes = []
+                }
+            } else {
+                selectedNodes = filtered
+            }
+
+            return AutomationQueryMatchResponse(
+                selectorIndex: index,
+                matchCount: selectedNodes.count,
+                nodes: selectedNodes
+            )
+        }
+
+        return AutomationQueryResponse(
+            source: "ios_runner",
+            token: token,
+            matches: matches
+        )
+    }
+
+    func getAppViewHierarchy(
+        foregroundApp: XCUIApplication,
+        excludeKeyboardElements: Bool,
+        includeStatusBars: Bool,
+        includeSafariWebViews: Bool
+    ) async throws -> AXElement {
         let appHierarchy = try getHierarchyWithFallback(foregroundApp)
         await SystemPermissionHelper.handleSystemPermissionAlertIfNeeded(appHierarchy: appHierarchy, foregroundApp: foregroundApp)
-                
-        let statusBars = logger.measure(message: "Fetch status bar hierarchy") {
-            fullStatusBars(springboardApplication)
-        } ?? []
-        
-        // Fetch Safari WebView hierarchy for iOS 26+ (runs in separate SafariViewService process)
-        let safariWebViewHierarchy = logger.measure(message: "Fetch Safari WebView hierarchy") {
-            getSafariWebViewHierarchy()
-        }
+
+        let statusBars = includeStatusBars
+            ? (logger.measure(message: "Fetch status bar hierarchy") {
+                fullStatusBars(springboardApplication)
+            } ?? [])
+            : []
+
+        let safariWebViewHierarchy = includeSafariWebViews
+            ? logger.measure(message: "Fetch Safari WebView hierarchy") {
+                getSafariWebViewHierarchy()
+            }
+            : nil
 
         let deviceFrame = springboardApplication.frame
         let deviceAxFrame = [
@@ -103,6 +181,24 @@ struct ViewHierarchyHandler: HTTPHandler {
             return AXElement(children: [appHierarchy, AXElement(children: statusBars), safariWebViewHierarchy].compactMap { $0 })
         }
     }
+
+    private func resolveAutomationHierarchy(
+        excludeKeyboardElements: Bool,
+        includeStatusBars: Bool,
+        includeSafariWebViews: Bool
+    ) async throws -> AXElement {
+        if let foregroundApp = RunningApp.getForegroundApp() {
+            return try await getAppViewHierarchy(
+                foregroundApp: foregroundApp,
+                excludeKeyboardElements: excludeKeyboardElements,
+                includeStatusBars: includeStatusBars,
+                includeSafariWebViews: includeSafariWebViews
+            )
+        }
+
+        NSLog("No foreground app found returning springboard app hierarchy")
+        return try elementHierarchy(xcuiElement: springboardApplication)
+    }
     
     func expandElementSizes(_ element: AXElement, offset: WindowOffset) -> AXElement {
         let adjustedFrame: AXFrame = [
@@ -142,14 +238,8 @@ struct ViewHierarchyHandler: HTTPHandler {
             if hierarchy.depth() < snapshotMaxDepth {
                 return hierarchy
             }
-            let count = try element.snapshot().children.count
-            var children: [AXElement] = []
-            for i in 0..<count {
-              let element = element.descendants(matching: .other).element(boundBy: i).firstMatch
-              children.append(try getHierarchyWithFallback(element))
-            }
-            hierarchy.children = children
-            return hierarchy
+            logger.info("Hierarchy depth exceeded max depth \(self.snapshotMaxDepth). Returning truncated snapshot.")
+            return truncateHierarchy(hierarchy, remainingDepth: snapshotMaxDepth)
         } catch let error {
             guard isIllegalArgumentError(error) else {
                 NSLog("Snapshot failure, cannot return view hierarchy due to \(error)")
@@ -297,4 +387,222 @@ struct ViewHierarchyHandler: HTTPHandler {
         let snapshotDictionary = try xcuiElement.snapshot().dictionaryRepresentation
         return AXElement(snapshotDictionary)
     }
+
+    private func truncateHierarchy(_ element: AXElement, remainingDepth: Int) -> AXElement {
+        let truncatedChildren: [AXElement]
+        if remainingDepth <= 0 {
+            truncatedChildren = []
+        } else {
+            truncatedChildren = (element.children ?? []).map {
+                truncateHierarchy($0, remainingDepth: remainingDepth - 1)
+            }
+        }
+
+        return AXElement(
+            identifier: element.identifier,
+            frame: element.frame,
+            value: element.value,
+            title: element.title,
+            label: element.label,
+            elementType: element.elementType,
+            enabled: element.enabled,
+            horizontalSizeClass: element.horizontalSizeClass,
+            verticalSizeClass: element.verticalSizeClass,
+            placeholderValue: element.placeholderValue,
+            selected: element.selected,
+            hasFocus: element.hasFocus,
+            displayID: element.displayID,
+            windowContextID: element.windowContextID,
+            children: truncatedChildren
+        )
+    }
+}
+
+@MainActor
+struct AutomationSnapshotHandler: HTTPHandler {
+    func handleRequest(_ request: FlyingFox.HTTPRequest) async throws -> HTTPResponse {
+        guard let requestBody = try? await JSONDecoder().decode(AutomationSnapshotRequest.self, from: request.bodyData) else {
+            return AppError(type: .precondition, message: "incorrect request body provided").httpResponse
+        }
+
+        do {
+            let response = try await ViewHierarchyHandler().automationSnapshotResponse(requestBody)
+            let body = try JSONEncoder().encode(response)
+            return HTTPResponse(statusCode: .ok, body: body)
+        } catch let error as AppError {
+            return error.httpResponse
+        } catch {
+            return AppError(message: "Snapshot failure while getting automation snapshot. Error: \(error.localizedDescription)").httpResponse
+        }
+    }
+}
+
+@MainActor
+struct AutomationQueryHandler: HTTPHandler {
+    func handleRequest(_ request: FlyingFox.HTTPRequest) async throws -> HTTPResponse {
+        guard let requestBody = try? await JSONDecoder().decode(AutomationQueryRequest.self, from: request.bodyData) else {
+            return AppError(type: .precondition, message: "incorrect request body provided").httpResponse
+        }
+
+        do {
+            let response = try await ViewHierarchyHandler().automationQueryResponse(requestBody)
+            let body = try JSONEncoder().encode(response)
+            return HTTPResponse(statusCode: .ok, body: body)
+        } catch let error as AppError {
+            return error.httpResponse
+        } catch {
+            return AppError(message: "Snapshot failure while querying automation elements. Error: \(error.localizedDescription)").httpResponse
+        }
+    }
+}
+
+private let defaultAutomationFields = [
+    "id",
+    "text",
+    "bounds",
+    "enabled",
+    "checked",
+    "focused",
+    "selected",
+    "clickable",
+    "depth",
+]
+
+private let automationCheckableElementTypes: Set<Int> = [
+    14,
+    15,
+]
+
+private let automationInteractiveElementTypes: Set<Int> = [
+    1,
+    3,
+    4,
+    9,
+    10,
+    11,
+    14,
+    15,
+    40,
+]
+
+private extension AXElement {
+    func flattenAutomationNodes(
+        fields: Set<String>,
+        interactiveOnly: Bool,
+        maxDepth: Int?,
+        depth: Int = 0
+    ) -> [AutomationNode] {
+        if let maxDepth, depth > maxDepth {
+            return []
+        }
+
+        let checked = automationCheckableElementTypes.contains(elementType) && value == "1"
+        let text = title?.nonBlankAutomationValue
+            ?? value?.nonBlankAutomationValue
+            ?? label.nonBlankAutomationValue
+        let node = AutomationNode(
+            id: fields.contains("id") ? identifier.nonBlankAutomationValue : nil,
+            text: fields.contains("text") ? text : nil,
+            bounds: fields.contains("bounds") ? frame.boundsString : nil,
+            enabled: fields.contains("enabled") ? enabled : nil,
+            checked: fields.contains("checked") ? checked : nil,
+            focused: fields.contains("focused") ? hasFocus : nil,
+            selected: fields.contains("selected") ? selected : nil,
+            clickable: fields.contains("clickable") ? isInteractiveAutomationElement : nil,
+            depth: fields.contains("depth") ? depth : 0
+        )
+
+        let childNodes = (children ?? []).flatMap {
+            $0.flattenAutomationNodes(
+                fields: fields,
+                interactiveOnly: interactiveOnly,
+                maxDepth: maxDepth,
+                depth: depth + 1
+            )
+        }
+
+        let includeNode = !interactiveOnly
+            || node.clickable == true
+            || !(node.id?.isEmpty ?? true)
+            || !(node.text?.isEmpty ?? true)
+
+        return includeNode ? [node] + childNodes : childNodes
+    }
+
+    var isInteractiveAutomationElement: Bool {
+        return automationInteractiveElementTypes.contains(elementType) || !(identifier.nonBlankAutomationValue?.isEmpty ?? true)
+    }
+}
+
+private extension AXFrame {
+    var boundsString: String {
+        let left = Int(x)
+        let top = Int(y)
+        let right = Int(x + width)
+        let bottom = Int(y + height)
+        return "[\(left),\(top)][\(right),\(bottom)]"
+    }
+}
+
+private extension AutomationQuerySelector {
+    func matches(node: AutomationNode) -> Bool {
+        let matchesId: Bool
+        if let id = id?.nonBlankAutomationValue {
+            let nodeId = node.id ?? ""
+            matchesId = useFuzzyMatching
+                ? nodeId.localizedCaseInsensitiveContains(id)
+                : nodeId == id
+        } else {
+            matchesId = true
+        }
+
+        let matchesText: Bool
+        if let text = text?.nonBlankAutomationValue {
+            let nodeText = node.text ?? ""
+            matchesText = useFuzzyMatching
+                ? nodeText.localizedCaseInsensitiveContains(text)
+                : nodeText == text
+        } else {
+            matchesText = true
+        }
+
+        return matchesId
+            && matchesText
+            && (enabled.map { node.enabled == $0 } ?? true)
+            && (checked.map { node.checked == $0 } ?? true)
+            && (focused.map { node.focused == $0 } ?? true)
+            && (selected.map { node.selected == $0 } ?? true)
+    }
+}
+
+private extension String {
+    var nonBlankAutomationValue: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+private func automationToken(_ nodes: [AutomationNode]) -> String {
+    let normalized = nodes.map { node in
+        let enabledValue = node.enabled.map { String(describing: $0) } ?? ""
+        let checkedValue = node.checked.map { String(describing: $0) } ?? ""
+        let focusedValue = node.focused.map { String(describing: $0) } ?? ""
+        let selectedValue = node.selected.map { String(describing: $0) } ?? ""
+        let clickableValue = node.clickable.map { String(describing: $0) } ?? ""
+
+        return [
+            node.id ?? "",
+            node.text ?? "",
+            node.bounds ?? "",
+            enabledValue,
+            checkedValue,
+            focusedValue,
+            selectedValue,
+            clickableValue,
+            String(node.depth),
+        ].joined(separator: "\u{001f}")
+    }.joined(separator: "\n")
+
+    let digest = SHA256.hash(data: Data(normalized.utf8))
+    return digest.map { String(format: "%02x", $0) }.joined()
 }

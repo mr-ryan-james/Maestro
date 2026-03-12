@@ -12,6 +12,7 @@ import maestro.cli.report.FlowAIOutput
 import maestro.cli.report.FlowDebugOutput
 import maestro.cli.report.TestDebugReporter
 import maestro.cli.report.TestSuiteReporter
+import maestro.debuglog.LiveTraceLogger
 import maestro.cli.util.PrintUtils
 import maestro.cli.util.TimeUtils
 import maestro.cli.view.ErrorViewUtils
@@ -177,6 +178,7 @@ class TestSuiteInteractor(
         val maestroConfig = YamlCommandReader.getConfig(commands)
         val flowName: String = maestroConfig?.name ?: flowFile.nameWithoutExtension
 
+        LiveTraceLogger.flowStarted(flowName, flowFile.absolutePath)
         logger.info("$shardPrefix Running flow $flowName")
 
         val flowTimeMillis = measureTimeMillis {
@@ -185,8 +187,13 @@ class TestSuiteInteractor(
                 val orchestra = Orchestra(
                     maestro = maestro,
                     screenshotsDir = testOutputDir?.resolve("screenshots"),
-                    onCommandStart = { _, command ->
+                    onCommandStart = { index, command ->
                         logger.info("${shardPrefix}${command.description()} RUNNING")
+                        LiveTraceLogger.commandStarted(
+                            flowName = flowName,
+                            command = command.description(),
+                            index = index,
+                        )
                         debugOutput.commands[command] = CommandDebugMetadata(
                             timestamp = System.currentTimeMillis(),
                             status = CommandStatus.RUNNING,
@@ -198,6 +205,12 @@ class TestSuiteInteractor(
                         debugOutput.commands[command]?.let {
                             it.status = CommandStatus.COMPLETED
                             it.calculateDuration()
+                            LiveTraceLogger.commandFinished(
+                                flowName = flowName,
+                                command = command.description(),
+                                outcome = "COMPLETED",
+                                durationMs = it.duration,
+                            )
                         }
                     },
                     onCommandFailed = { _, command, e ->
@@ -207,6 +220,13 @@ class TestSuiteInteractor(
                             it.status = CommandStatus.FAILED
                             it.calculateDuration()
                             it.error = e
+                            LiveTraceLogger.commandFinished(
+                                flowName = flowName,
+                                command = command.description(),
+                                outcome = "FAILED",
+                                durationMs = it.duration,
+                                detail = e.message,
+                            )
                         }
 
                         ScreenshotUtils.takeDebugScreenshot(maestro, debugOutput, CommandStatus.FAILED)
@@ -214,12 +234,22 @@ class TestSuiteInteractor(
                     },
                     onCommandSkipped = { _, command ->
                         logger.info("${shardPrefix}${command.description()} SKIPPED")
+                        LiveTraceLogger.commandFinished(
+                            flowName = flowName,
+                            command = command.description(),
+                            outcome = "SKIPPED",
+                        )
                         debugOutput.commands[command]?.let {
                             it.status = CommandStatus.SKIPPED
                         }
                     },
                     onCommandWarned = { _, command ->
                         logger.info("${shardPrefix}${command.description()} WARNED")
+                        LiveTraceLogger.commandFinished(
+                            flowName = flowName,
+                            command = command.description(),
+                            outcome = "WARNED",
+                        )
                         debugOutput.commands[command]?.apply {
                             status = CommandStatus.WARNED
                         }
@@ -251,6 +281,11 @@ class TestSuiteInteractor(
             }
         }
         val flowDuration = TimeUtils.durationInSeconds(flowTimeMillis)
+        LiveTraceLogger.flowCompleted(
+            flowName = flowName,
+            success = flowStatus == FlowStatus.SUCCESS,
+            detail = errorMessage ?: debugOutput.exception?.message,
+        )
 
         TestDebugReporter.saveFlow(
             flowName = flowName,

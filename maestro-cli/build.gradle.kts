@@ -174,6 +174,7 @@ dependencies {
     implementation(libs.ktor.server.netty)
     implementation(libs.ktor.server.cors)
     implementation(libs.ktor.server.status.pages)
+    implementation(libs.ktor.server.websockets)
     implementation(libs.jarchivelib)
     implementation(libs.commons.codec)
     implementation(libs.kotlinx.coroutines.core)

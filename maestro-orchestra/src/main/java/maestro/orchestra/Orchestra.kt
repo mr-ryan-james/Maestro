@@ -39,6 +39,7 @@ import maestro.ViewHierarchy
 import maestro.ai.cloud.Defect
 import maestro.ai.CloudAIPredictionEngine
 import maestro.ai.AIPredictionEngine
+import maestro.debuglog.LiveTraceLogger
 import maestro.js.GraalJsEngine
 import maestro.js.JsEngine
 import maestro.js.RhinoJsEngine
@@ -351,6 +352,9 @@ class Orchestra(
             is AssertCommand -> assertCommand(command)
             is AssertScreenshotCommand -> assertScreenshotCommand(command)
             is AssertConditionCommand -> assertConditionCommand(command)
+            is DismissKnownOverlaysCommand -> dismissKnownOverlaysCommand(command)
+            is TapFirstVisibleNowCommand -> tapFirstVisibleNowCommand(command)
+            is AssertNoneVisibleNowCommand -> assertNoneVisibleNowCommand(command)
             is AssertNoDefectsWithAICommand -> assertNoDefectsWithAICommand(command, maestroCommand)
             is AssertWithAICommand -> assertWithAICommand(command, maestroCommand)
             is ExtractTextWithAICommand -> extractTextWithAICommand(command, maestroCommand)
@@ -438,6 +442,220 @@ class Orchestra(
         }
 
         return false
+    }
+
+    private fun dismissKnownOverlaysCommand(command: DismissKnownOverlaysCommand): Boolean {
+        val maxPasses = command.maxPasses.coerceIn(1, 5)
+        var dismissedAny = false
+        repeat(maxPasses) { passIndex ->
+            val dismissed = dismissKnownOverlayPass(
+                pass = passIndex + 1,
+                totalPasses = maxPasses,
+            )
+            if (!dismissed) {
+                return dismissedAny
+            }
+            dismissedAny = true
+        }
+
+        return dismissedAny
+    }
+
+    private fun tapFirstVisibleNowCommand(command: TapFirstVisibleNowCommand): Boolean {
+        if (command.selectors.isEmpty()) {
+            if (command.optional) {
+                return false
+            }
+            throw MaestroException.InvalidCommand("tapFirstVisibleNow requires at least one selector")
+        }
+
+        val selectorDescriptions = command.selectors.map { it.description() }
+        val automationSelectors = command.selectors.mapNotNull { selector -> selector.toAutomationSelector() }
+        if (automationSelectors.size == command.selectors.size) {
+            val startedAt = System.currentTimeMillis()
+            try {
+                LiveTraceLogger.note(
+                    event = "TAP_FIRST_VISIBLE_NOW",
+                    detail = "phase=start selectorCount=${automationSelectors.size} source=minimal_query",
+                )
+                val result = maestro.driver.queryAutomationElements(
+                    AutomationQueryRequest(
+                        selectors = automationSelectors,
+                        interactiveOnly = false,
+                        fields = DEFAULT_AUTOMATION_FIELDS,
+                        includeStatusBars = false,
+                        includeSafariWebViews = false,
+                        excludeKeyboardElements = false,
+                    ),
+                )
+                val firstMatch = result.matches.firstOrNull { match -> match.matchCount > 0 }
+                if (firstMatch != null) {
+                    val node = firstMatch.nodes.firstOrNull()
+                    val tapPoint = node?.bounds?.let(::parseAutomationBoundsCenter)
+                    if (tapPoint != null) {
+                        LiveTraceLogger.note(
+                            event = "TAP_FIRST_VISIBLE_NOW",
+                            detail = "phase=end selector=${selectorDescriptions.getOrNull(firstMatch.selectorIndex) ?: "unknown"} source=${result.source} durationMs=${System.currentTimeMillis() - startedAt}",
+                        )
+                        maestro.tap(
+                            x = tapPoint.x,
+                            y = tapPoint.y,
+                            retryIfNoChange = false,
+                            longPress = false,
+                            tapRepeat = null,
+                            waitToSettleTimeoutMs = command.waitToSettleTimeoutMs,
+                        )
+                        return true
+                    }
+                }
+
+                LiveTraceLogger.note(
+                    event = "TAP_FIRST_VISIBLE_NOW",
+                    detail = "phase=end selectorCount=${automationSelectors.size} source=${result.source} matched=false durationMs=${System.currentTimeMillis() - startedAt}",
+                )
+            } catch (throwable: Throwable) {
+                LiveTraceLogger.note(
+                    event = "TAP_FIRST_VISIBLE_NOW_FAILED",
+                    detail = "selectorCount=${automationSelectors.size} detail=${throwable.message ?: throwable::class.java.simpleName}",
+                )
+            }
+        }
+
+        val fallbackSelector = command.selectors.firstOrNull { selector ->
+            isSelectorVisible(
+                selector = selector,
+                commandOptional = command.optional,
+                timeoutMs = 0L,
+            )
+        }
+
+        if (fallbackSelector == null) {
+            if (command.optional) {
+                return false
+            }
+            throw MaestroException.ElementNotFound(
+                message = "No selectors were visible now for tapFirstVisibleNow",
+                hierarchyRoot = maestro.viewHierarchy().root,
+                debugMessage = "tapFirstVisibleNow could not find a visible selector on the fast path or fallback path.",
+            )
+        }
+
+        return tapOnElement(
+            command = TapOnElementCommand(
+                selector = fallbackSelector,
+                retryIfNoChange = false,
+                waitUntilVisible = false,
+                waitToSettleTimeoutMs = command.waitToSettleTimeoutMs,
+                optional = command.optional,
+            ),
+            retryIfNoChange = false,
+            waitUntilVisible = false,
+            config = null,
+        )
+    }
+
+    private fun assertNoneVisibleNowCommand(command: AssertNoneVisibleNowCommand): Boolean {
+        if (command.selectors.isEmpty()) {
+            return false
+        }
+
+        val selectorDescriptions = command.selectors.map { it.description() }
+        val automationSelectors = command.selectors.mapNotNull { selector -> selector.toAutomationSelector() }
+        if (automationSelectors.size == command.selectors.size) {
+            val startedAt = System.currentTimeMillis()
+            return try {
+                LiveTraceLogger.note(
+                    event = "ASSERT_NONE_VISIBLE_NOW_BATCH",
+                    detail = "phase=start selectorCount=${automationSelectors.size} source=minimal_query",
+                )
+                val result = maestro.driver.queryAutomationElements(
+                    AutomationQueryRequest(
+                        selectors = automationSelectors,
+                        interactiveOnly = false,
+                        fields = DEFAULT_AUTOMATION_FIELDS,
+                        includeStatusBars = false,
+                        includeSafariWebViews = false,
+                        excludeKeyboardElements = false,
+                    ),
+                )
+                val visibleMatches = result.matches
+                    .filter { it.matchCount > 0 }
+                    .map { match ->
+                        val selectorDescription = selectorDescriptions.getOrNull(match.selectorIndex) ?: "selector[${match.selectorIndex}]"
+                        val nodeDescription = match.nodes.firstOrNull()?.let { node ->
+                            node.text ?: node.id ?: node.bounds ?: "unknown"
+                        } ?: "unknown"
+                        "$selectorDescription => $nodeDescription"
+                    }
+
+                LiveTraceLogger.note(
+                    event = "ASSERT_NONE_VISIBLE_NOW_BATCH",
+                    detail = "phase=end selectorCount=${automationSelectors.size} source=${result.source} matched=${visibleMatches.isNotEmpty()} durationMs=${System.currentTimeMillis() - startedAt}",
+                )
+
+                if (visibleMatches.isNotEmpty()) {
+                    throw MaestroException.AssertionFailure(
+                        message = "Assertion is false: one or more selectors are visible now (${visibleMatches.joinToString()})",
+                        hierarchyRoot = maestro.viewHierarchy().root,
+                        debugMessage = "Fast negative assertion matched unexpected selectors: ${visibleMatches.joinToString()}",
+                    )
+                }
+
+                false
+            } catch (throwable: Throwable) {
+                LiveTraceLogger.note(
+                    event = "ASSERT_NONE_VISIBLE_NOW_BATCH_FAILED",
+                    detail = "selectorCount=${automationSelectors.size} detail=${throwable.message ?: throwable::class.java.simpleName}",
+                )
+                if (throwable is MaestroException.AssertionFailure) {
+                    throw throwable
+                }
+                command.selectors.forEach { selector ->
+                    assertConditionCommand(
+                        AssertConditionCommand(
+                            condition = Condition(notVisibleNow = selector),
+                            timeout = "0",
+                            optional = command.optional,
+                        ),
+                    )
+                }
+                false
+            }
+        }
+
+        command.selectors.forEach { selector ->
+            assertConditionCommand(
+                AssertConditionCommand(
+                    condition = Condition(notVisibleNow = selector),
+                    timeout = "0",
+                    optional = command.optional,
+                ),
+            )
+        }
+        return false
+    }
+
+    private fun parseAutomationBoundsCenter(bounds: String): Point? {
+        val values = Regex("-?\\d+")
+            .findAll(bounds)
+            .mapNotNull { match -> match.value.toIntOrNull() }
+            .toList()
+        if (values.size < 4) {
+            return null
+        }
+
+        val left = values[0]
+        val top = values[1]
+        val right = values[2]
+        val bottom = values[3]
+        if (right <= left || bottom <= top) {
+            return null
+        }
+
+        return Point(
+            x = left + ((right - left) / 2),
+            y = top + ((bottom - top) / 2),
+        )
     }
 
     private suspend fun assertNoDefectsWithAICommand(
@@ -658,7 +876,17 @@ class Orchestra(
     }
 
     private fun waitForAnimationToEndCommand(command: WaitForAnimationToEndCommand): Boolean {
+        val startedAt = System.currentTimeMillis()
+        LiveTraceLogger.waitStarted(
+            kind = "waitForAnimationToEnd",
+            detail = "timeoutMs=${command.timeout}",
+        )
         maestro.waitForAnimationToEnd(command.timeout)
+        LiveTraceLogger.waitFinished(
+            kind = "waitForAnimationToEnd",
+            durationMs = System.currentTimeMillis() - startedAt,
+            detail = "timeoutMs=${command.timeout}",
+        )
 
         return true
     }
@@ -936,43 +1164,169 @@ class Orchestra(
             }
         }
 
+        val conditionTimeoutMs = condition.conditionTimeoutMs ?: timeoutMs
+
         condition.visible?.let {
-            try {
-                findElement(
+            val timeout = conditionLookupTimeout(conditionTimeoutMs, immediate = false)
+            val matched = traceConditionEvaluation(
+                kind = "visible",
+                description = it.description(),
+                timeoutMs = timeout,
+            ) {
+                isSelectorVisible(
                     selector = it,
-                    timeoutMs = adjustedToLatestInteraction(timeoutMs ?: optionalLookupTimeoutMs),
-                    optional = commandOptional,
+                    commandOptional = commandOptional,
+                    timeoutMs = timeout,
                 )
-            } catch (_: MaestroException.ElementNotFound) {
+            }
+            if (!matched) {
+                return false
+            }
+        }
+
+        condition.visibleNow?.let {
+            val matched = traceConditionEvaluation(
+                kind = "visibleNow",
+                description = it.description(),
+                timeoutMs = 0L,
+            ) {
+                isSelectorVisible(
+                    selector = it,
+                    commandOptional = commandOptional,
+                    timeoutMs = 0L,
+                )
+            }
+            if (!matched) {
                 return false
             }
         }
 
         condition.notVisible?.let {
-            val result = MaestroTimer.withTimeout(adjustedToLatestInteraction(timeoutMs ?: optionalLookupTimeoutMs)) {
-                try {
-                    findElement(
+            val conditionTimeout = conditionLookupTimeout(conditionTimeoutMs, immediate = false)
+            val result = traceConditionEvaluation(
+                kind = "notVisible",
+                description = it.description(),
+                timeoutMs = conditionTimeout,
+            ) {
+                if (conditionTimeout == 0L) {
+                    !isSelectorVisible(
                         selector = it,
-                        timeoutMs = 500L,
-                        optional = commandOptional,
+                        commandOptional = commandOptional,
+                        timeoutMs = 0L,
                     )
+                } else {
+                    MaestroTimer.withTimeout(conditionTimeout) {
+                        try {
+                            findElement(
+                                selector = it,
+                                timeoutMs = minOf(500L, conditionTimeout),
+                                optional = commandOptional,
+                            )
 
-                    // If we got to that point, the element is still visible.
-                    // Returning null to keep waiting.
-                    null
-                } catch (ignored: MaestroException.ElementNotFound) {
-                    // Element was not visible, as we expected
-                    true
+                            // If we got to that point, the element is still visible.
+                            // Returning null to keep waiting.
+                            null
+                        } catch (ignored: MaestroException.ElementNotFound) {
+                            // Element was not visible, as we expected
+                            true
+                        }
+                    } == true
                 }
             }
 
             // Element was actually visible
-            if (result != true) {
+            if (!result) {
+                return false
+            }
+        }
+
+        condition.notVisibleNow?.let {
+            val visible = traceConditionEvaluation(
+                kind = "notVisibleNow",
+                description = it.description(),
+                timeoutMs = 0L,
+            ) {
+                isSelectorVisible(
+                    selector = it,
+                    commandOptional = commandOptional,
+                    timeoutMs = 0L,
+                )
+            }
+            if (visible) {
                 return false
             }
         }
 
         return true
+    }
+
+    private fun conditionLookupTimeout(
+        timeoutMs: Long?,
+        immediate: Boolean,
+    ): Long {
+        return if (immediate) {
+            0L
+        } else {
+            adjustedToLatestInteraction(timeoutMs ?: optionalLookupTimeoutMs)
+        }
+    }
+
+    private fun isSelectorVisible(
+        selector: ElementSelector,
+        commandOptional: Boolean,
+        timeoutMs: Long,
+    ): Boolean {
+        if (timeoutMs == 0L) {
+            querySelectorVisibleNow(selector)?.let { visible ->
+                return visible
+            }
+        }
+
+        return try {
+            findElement(
+                selector = selector,
+                timeoutMs = timeoutMs,
+                optional = commandOptional,
+            )
+            true
+        } catch (_: MaestroException.ElementNotFound) {
+            false
+        }
+    }
+
+    private fun querySelectorVisibleNow(selector: ElementSelector): Boolean? {
+        val automationSelector = selector.toAutomationSelector() ?: return null
+        val description = selector.description()
+        val startedAt = System.currentTimeMillis()
+
+        return try {
+            LiveTraceLogger.note(
+                event = "SELECTOR_LOOKUP_FAST_PATH",
+                detail = "selector=$description phase=start source=minimal_query",
+            )
+            val result = maestro.driver.queryAutomationElements(
+                AutomationQueryRequest(
+                    selectors = listOf(automationSelector),
+                    interactiveOnly = false,
+                    fields = DEFAULT_AUTOMATION_FIELDS,
+                    includeStatusBars = false,
+                    includeSafariWebViews = false,
+                    excludeKeyboardElements = false,
+                ),
+            )
+            val matched = result.matches.firstOrNull()?.matchCount?.let { it > 0 } ?: false
+            LiveTraceLogger.note(
+                event = "SELECTOR_LOOKUP_FAST_PATH",
+                detail = "selector=$description phase=end source=${result.source} matched=$matched durationMs=${System.currentTimeMillis() - startedAt}",
+            )
+            matched
+        } catch (throwable: Throwable) {
+            LiveTraceLogger.note(
+                event = "SELECTOR_LOOKUP_FAST_PATH_FAILED",
+                detail = "selector=$description source=minimal_query detail=${throwable.message ?: throwable::class.java.simpleName}",
+            )
+            null
+        }
     }
 
     private suspend fun executeSubflowCommands(commands: List<MaestroCommand>, config: MaestroConfig?): Boolean {
@@ -1314,16 +1668,30 @@ class Orchestra(
             - Element may be temporarily unavailable due to loading state.
             - This could be a real regression that needs to be addressed.
         """.trimIndent()
+        val startedAt = System.currentTimeMillis()
+        LiveTraceLogger.selectorLookupStarted(
+            description = description,
+            timeoutMs = timeout,
+            optional = optional,
+        )
         if (selector.childOf != null) {
             val parentViewHierarchy = findElementViewHierarchy(
                 selector.childOf,
                 timeout
             )
-            return maestro.findElementWithTimeout(
+            val result = maestro.findElementWithTimeout(
                 timeout,
                 filterFunc,
                 parentViewHierarchy
-            ) ?: throw MaestroException.ElementNotFound(
+            )
+            LiveTraceLogger.selectorLookupFinished(
+                description = description,
+                timeoutMs = timeout,
+                optional = optional,
+                found = result != null,
+                durationMs = System.currentTimeMillis() - startedAt,
+            )
+            return result ?: throw MaestroException.ElementNotFound(
                 "Element not found: $description",
                 parentViewHierarchy.root,
                 debugMessage = debugMessage
@@ -1339,14 +1707,57 @@ class Orchestra(
             - Element may be temporarily unavailable due to loading state.
             - This could be a real regression that needs to be addressed.
         """.trimIndent()
-        return maestro.findElementWithTimeout(
+        val result = maestro.findElementWithTimeout(
             timeoutMs = timeout,
             filter = filterFunc
-        ) ?: throw MaestroException.ElementNotFound(
+        )
+        LiveTraceLogger.selectorLookupFinished(
+            description = description,
+            timeoutMs = timeout,
+            optional = optional,
+            found = result != null,
+            durationMs = System.currentTimeMillis() - startedAt,
+        )
+        return result ?: throw MaestroException.ElementNotFound(
             "Element not found: $description",
             maestro.viewHierarchy().root,
             debugMessage = exceptionDebugMessage
         )
+    }
+
+    private inline fun traceConditionEvaluation(
+        kind: String,
+        description: String,
+        timeoutMs: Long,
+        block: () -> Boolean,
+    ): Boolean {
+        val startedAt = System.currentTimeMillis()
+        LiveTraceLogger.conditionStarted(
+            kind = kind,
+            description = description,
+            timeoutMs = timeoutMs,
+        )
+        return try {
+            block().also { matched ->
+                LiveTraceLogger.conditionFinished(
+                    kind = kind,
+                    description = description,
+                    timeoutMs = timeoutMs,
+                    matched = matched,
+                    durationMs = System.currentTimeMillis() - startedAt,
+                )
+            }
+        } catch (throwable: Throwable) {
+            LiveTraceLogger.conditionFinished(
+                kind = kind,
+                description = description,
+                timeoutMs = timeoutMs,
+                matched = false,
+                durationMs = System.currentTimeMillis() - startedAt,
+                detail = throwable.message,
+            )
+            throw throwable
+        }
     }
 
     private fun findElementViewHierarchy(
@@ -1374,6 +1785,76 @@ class Orchestra(
             "Element not found: $description",
             parentViewHierarchy.root,
             debugMessage = debugMessage
+        )
+    }
+
+    private fun dismissKnownOverlayPass(pass: Int, totalPasses: Int): Boolean {
+        val snapshot = maestro.driver.automationSnapshot(
+            AutomationSnapshotRequest(
+                mode = AutomationSnapshotMode.MINIMAL,
+                flat = true,
+                interactiveOnly = false,
+                fields = DEFAULT_AUTOMATION_FIELDS,
+                includeStatusBars = false,
+                includeSafariWebViews = false,
+                excludeKeyboardElements = false,
+            ),
+        )
+        LiveTraceLogger.note(
+            event = "KNOWN_OVERLAY_SWEEP",
+            detail = "phase=snapshot pass=$pass/$totalPasses source=${snapshot.source} nodeCount=${snapshot.nodeCount}",
+        )
+
+        val nodes = snapshot.nodes
+        for (rule in KNOWN_OVERLAY_RULES) {
+            val blockerNode = nodes.firstOrNull(rule.blocker::matches) ?: continue
+            val actionNode = rule.actions.asSequence()
+                .flatMap { selector -> nodes.asSequence().filter(selector::matches) }
+                .firstOrNull()
+                ?: throw MaestroException.AssertionFailure(
+                    message = "Known overlay '${rule.label}' is visible but no dismissal action was found.",
+                    hierarchyRoot = maestro.viewHierarchy().root,
+                    debugMessage = "Overlay blocker '${rule.label}' matched '${blockerNode.text ?: blockerNode.id ?: "unknown"}', but none of the expected action selectors were visible.",
+                )
+
+            val tapPoint = actionNode.bounds?.toCenterPoint()
+                ?: throw MaestroException.AssertionFailure(
+                    message = "Known overlay '${rule.label}' matched but the dismissal target had no bounds.",
+                    hierarchyRoot = maestro.viewHierarchy().root,
+                    debugMessage = "Action node '${actionNode.text ?: actionNode.id ?: "unknown"}' did not expose bounds in the minimal automation snapshot.",
+                )
+
+            LiveTraceLogger.note(
+                event = "KNOWN_OVERLAY_DISMISSED",
+                detail = "pass=$pass/$totalPasses rule=${rule.label} blocker=${blockerNode.text ?: blockerNode.id ?: "unknown"} action=${actionNode.text ?: actionNode.id ?: "unknown"} source=${snapshot.source}",
+            )
+            maestro.tap(
+                x = tapPoint.x,
+                y = tapPoint.y,
+                retryIfNoChange = false,
+                waitToSettleTimeoutMs = 500,
+            )
+            return true
+        }
+
+        LiveTraceLogger.note(
+            event = "KNOWN_OVERLAY_SWEEP",
+            detail = "phase=no_match pass=$pass/$totalPasses source=${snapshot.source}",
+        )
+        return false
+    }
+
+    private fun ElementSelector.toAutomationSelector(): AutomationSelector? = toAutomationSelectorFastPath()
+
+    private fun String.toCenterPoint(): Point? {
+        val match = BOUNDS_REGEX.matchEntire(this) ?: return null
+        val left = match.groupValues[1].toInt()
+        val top = match.groupValues[2].toInt()
+        val right = match.groupValues[3].toInt()
+        val bottom = match.groupValues[4].toInt()
+        return Point(
+            x = left + ((right - left) / 2),
+            y = top + ((bottom - top) / 2),
         )
     }
 
@@ -1652,12 +2133,105 @@ class Orchestra(
         FAIL
     }
 
+    private data class KnownOverlayRule(
+        val label: String,
+        val blocker: AutomationSelector,
+        val actions: List<AutomationSelector>,
+    )
+
     companion object {
 
         val REGEX_OPTIONS = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL, RegexOption.MULTILINE)
 
         private const val MAX_ERASE_CHARACTERS = 50
         private const val MAX_RETRIES_ALLOWED = 3
+        private val BOUNDS_REGEX = Regex("""\[(\d+),(\d+)]\[(\d+),(\d+)]""")
+        private val KNOWN_OVERLAY_RULES = listOf(
+            KnownOverlayRule(
+                label = "open-in-app",
+                blocker = AutomationSelector(text = "Open in", useFuzzyMatching = true),
+                actions = listOf(
+                    AutomationSelector(text = "Open", useFuzzyMatching = false),
+                ),
+            ),
+            KnownOverlayRule(
+                label = "developer-menu",
+                blocker = AutomationSelector(
+                    text = "This is the developer menu. It gives you access to useful tools in your development builds.",
+                    useFuzzyMatching = false,
+                ),
+                actions = listOf(
+                    AutomationSelector(text = "Continue", useFuzzyMatching = false),
+                ),
+            ),
+            KnownOverlayRule(
+                label = "go-home",
+                blocker = AutomationSelector(text = "Go home", useFuzzyMatching = false),
+                actions = listOf(
+                    AutomationSelector(text = "Go home", useFuzzyMatching = false),
+                ),
+            ),
+            KnownOverlayRule(
+                label = "no-script-url",
+                blocker = AutomationSelector(text = "No script URL provided", useFuzzyMatching = false),
+                actions = listOf(
+                    AutomationSelector(text = "Dismiss", useFuzzyMatching = false),
+                    AutomationSelector(text = "Reload", useFuzzyMatching = false),
+                ),
+            ),
+            KnownOverlayRule(
+                label = "app-entry-not-found",
+                blocker = AutomationSelector(text = "App entry not found", useFuzzyMatching = false),
+                actions = listOf(
+                    AutomationSelector(text = "Dismiss", useFuzzyMatching = false),
+                    AutomationSelector(text = "Reload", useFuzzyMatching = false),
+                ),
+            ),
+            KnownOverlayRule(
+                label = "project-load-problem",
+                blocker = AutomationSelector(text = "There was a problem loading the project.", useFuzzyMatching = false),
+                actions = listOf(
+                    AutomationSelector(text = "Go to home", useFuzzyMatching = false),
+                    AutomationSelector(text = "Reload", useFuzzyMatching = false),
+                ),
+            ),
+            KnownOverlayRule(
+                label = "enable-dictation",
+                blocker = AutomationSelector(text = "Enable Dictation?", useFuzzyMatching = false),
+                actions = listOf(
+                    AutomationSelector(text = "Not Now", useFuzzyMatching = false),
+                ),
+            ),
+            KnownOverlayRule(
+                label = "notifications-permission",
+                blocker = AutomationSelector(text = "Would Like to Send You Notifications", useFuzzyMatching = true),
+                actions = listOf(
+                    AutomationSelector(text = "Don't Allow", useFuzzyMatching = false),
+                    AutomationSelector(text = "Don’t Allow", useFuzzyMatching = false),
+                ),
+            ),
+            KnownOverlayRule(
+                label = "iap-init-failure",
+                blocker = AutomationSelector(text = "Failed to initialize in-app purchases", useFuzzyMatching = false),
+                actions = listOf(
+                    AutomationSelector(text = "OK", useFuzzyMatching = false),
+                ),
+            ),
+            KnownOverlayRule(
+                label = "iap-init-error",
+                blocker = AutomationSelector(text = "IAP Init Error:", useFuzzyMatching = true),
+                actions = listOf(
+                    AutomationSelector(text = "×", useFuzzyMatching = false),
+                ),
+            ),
+            KnownOverlayRule(
+                label = "done-button-overlay",
+                blocker = AutomationSelector(text = "Done", useFuzzyMatching = false),
+                actions = listOf(
+                    AutomationSelector(text = "Done", useFuzzyMatching = false),
+                ),
+            ),
+        )
         private val logger = LoggerFactory.getLogger(Orchestra::class.java)
     }
 
@@ -1674,3 +2248,97 @@ class Orchestra(
         get() = flowController.isPaused
 }
 
+internal data class LiteralAutomationSelector(
+    val value: String,
+    val useFuzzyMatching: Boolean,
+)
+
+internal fun ElementSelector.toAutomationSelectorFastPath(): AutomationSelector? {
+    if (size != null
+        || below != null
+        || above != null
+        || leftOf != null
+        || rightOf != null
+        || containsChild != null
+        || !containsDescendants.isNullOrEmpty()
+        || !traits.isNullOrEmpty()
+        || childOf != null
+        || css != null
+    ) {
+        return null
+    }
+
+    val id = idRegex?.toLiteralAutomationSelector() ?: if (idRegex != null) return null else null
+    val text = textRegex?.toLiteralAutomationSelector() ?: if (textRegex != null) return null else null
+    if (id == null && text == null && enabled == null && checked == null && focused == null && selected == null) {
+        return null
+    }
+
+    val useFuzzyMatching = listOfNotNull(id?.useFuzzyMatching, text?.useFuzzyMatching)
+        .distinct()
+        .singleOrNull()
+        ?: return null
+
+    return AutomationSelector(
+        id = id?.value,
+        text = text?.value,
+        index = index?.toIntOrNull(),
+        useFuzzyMatching = useFuzzyMatching,
+        enabled = enabled,
+        checked = checked,
+        focused = focused,
+        selected = selected,
+    )
+}
+
+internal fun String.toLiteralAutomationSelector(): LiteralAutomationSelector? {
+    if (isBlank()) {
+        return null
+    }
+
+    var candidate = this
+    if (candidate.startsWith("^")) {
+        candidate = candidate.substring(1)
+    }
+    if (candidate.endsWith("$") && !candidate.endsWith("\\$")) {
+        candidate = candidate.substring(0, candidate.length - 1)
+    }
+
+    var useFuzzyMatching = false
+    if (candidate.startsWith(".*") && candidate.endsWith(".*") && candidate.length > 4) {
+        candidate = candidate.substring(2, candidate.length - 2)
+        useFuzzyMatching = true
+    }
+
+    val builder = StringBuilder(candidate.length)
+    var index = 0
+    while (index < candidate.length) {
+        val current = candidate[index]
+        if (current == '\\') {
+            if (index == candidate.lastIndex) {
+                return null
+            }
+            builder.append(candidate[index + 1])
+            index += 2
+            continue
+        }
+
+        if (current in REGEX_META_CHARACTERS) {
+            return null
+        }
+
+        builder.append(current)
+        index += 1
+    }
+
+    if (builder.isEmpty()) {
+        return null
+    }
+
+    return LiteralAutomationSelector(
+        value = builder.toString(),
+        useFuzzyMatching = useFuzzyMatching,
+    )
+}
+
+private val REGEX_META_CHARACTERS = setOf('.', '^', '$', '|', '[', ']', '(', ')', '{', '}', '?', '+', '*')

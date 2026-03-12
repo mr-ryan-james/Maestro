@@ -3,6 +3,8 @@ package ios
 import com.github.michaelbull.result.*
 import device.IOSDevice
 import device.IOSScreenRecording
+import hierarchy.AutomationQueryResult
+import hierarchy.AutomationSnapshotResult
 import xcuitest.api.DeviceInfo
 import ios.xctest.XCTestIOSDevice
 import okio.Sink
@@ -13,6 +15,8 @@ import maestro.utils.Insights
 import maestro.utils.NoopInsights
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import xcuitest.api.AutomationQueryRequest
+import xcuitest.api.AutomationSnapshotRequest
 
 class LocalIOSDevice(
     override val deviceId: String?,
@@ -52,6 +56,14 @@ class LocalIOSDevice(
             future.cancel(false)
         }
         return result
+    }
+
+    override fun automationSnapshot(request: AutomationSnapshotRequest): AutomationSnapshotResult {
+        return xcTestDevice.automationSnapshot(request)
+    }
+
+    override fun queryAutomationElements(request: AutomationQueryRequest): AutomationQueryResult {
+        return xcTestDevice.queryAutomationElements(request)
     }
 
     override fun tap(x: Int, y: Int) {

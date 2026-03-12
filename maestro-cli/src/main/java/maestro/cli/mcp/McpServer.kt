@@ -38,6 +38,15 @@ import maestro.cli.mcp.tools.ClearStateTool
 import maestro.cli.mcp.tools.SetLocationTool
 import maestro.cli.mcp.tools.CopyTextFromTool
 import maestro.cli.mcp.tools.OpenLinkTool
+import maestro.cli.mcp.tools.OpenSessionTool
+import maestro.cli.mcp.tools.ResumeSessionTool
+import maestro.cli.mcp.tools.CloseSessionTool
+import maestro.cli.mcp.tools.ListSessionsTool
+import maestro.cli.mcp.tools.HardResetSessionTool
+import maestro.cli.mcp.tools.QueryElementsTool
+import maestro.cli.mcp.tools.SnapshotTool
+import maestro.cli.mcp.tools.AwaitEventTool
+import maestro.cli.mcp.tools.ExecuteBatchTool
 import maestro.cli.util.WorkingDirectory
 
 // Main function to run the Maestro MCP server
@@ -64,6 +73,11 @@ fun runMaestroMcpServer() {
     server.addTools(listOf(
         ListDevicesTool.create(),
         StartDeviceTool.create(),
+        OpenSessionTool.create(sessionManager),
+        ResumeSessionTool.create(),
+        CloseSessionTool.create(),
+        ListSessionsTool.create(),
+        HardResetSessionTool.create(sessionManager),
         LaunchAppTool.create(sessionManager),
         TakeScreenshotTool.create(sessionManager),
         TapOnTool.create(sessionManager),
@@ -88,7 +102,11 @@ fun runMaestroMcpServer() {
         ClearStateTool.create(sessionManager),
         SetLocationTool.create(sessionManager),
         CopyTextFromTool.create(sessionManager),
-        OpenLinkTool.create(sessionManager)
+        OpenLinkTool.create(sessionManager),
+        QueryElementsTool.create(sessionManager),
+        SnapshotTool.create(sessionManager),
+        AwaitEventTool.create(sessionManager),
+        ExecuteBatchTool.create(sessionManager)
     ))
 
 
@@ -104,6 +122,7 @@ fun runMaestroMcpServer() {
         server.connect(transport)
         val done = Job()
         server.onClose {
+            McpSessionRegistry.closeAll()
             done.complete()
         }
         done.join()

@@ -5,9 +5,6 @@ import io.modelcontextprotocol.kotlin.sdk.server.RegisteredTool
 import kotlinx.serialization.json.*
 import maestro.cli.session.MaestroSessionManager
 import maestro.orchestra.InputTextCommand
-import maestro.orchestra.Orchestra
-import maestro.orchestra.MaestroCommand
-import kotlinx.coroutines.runBlocking
 
 object InputTextTool {
     fun create(sessionManager: MaestroSessionManager): RegisteredTool {
@@ -21,52 +18,50 @@ object InputTextTool {
                             put("type", "string")
                             put("description", "The ID of the device to input text on")
                         }
+                        putJsonObject("session_id") {
+                            put("type", "string")
+                            put("description", "Optional hot session id returned by open_session")
+                        }
                         putJsonObject("text") {
                             put("type", "string")
                             put("description", "The text to input")
                         }
                     },
-                    required = listOf("device_id", "text")
+                    required = listOf("text")
                 )
             )
         ) { request ->
             try {
-                val deviceId = request.arguments["device_id"]?.jsonPrimitive?.content
-                val text = request.arguments["text"]?.jsonPrimitive?.content
-                
-                if (deviceId == null || text == null) {
+                val deviceId = ToolSupport.resolveDeviceId(request)
+                val text = ToolSupport.requiredString(request, "text")
+
+                if (deviceId == null) {
                     return@RegisteredTool CallToolResult(
-                        content = listOf(TextContent("Both device_id and text are required")),
+                        content = listOf(TextContent(ToolSupport.requireDeviceIdMessage())),
                         isError = true
                     )
                 }
-                
-                val result = sessionManager.newSession(
-                    host = null,
-                    port = null,
-                    driverHostPort = null,
+                if (text == null) {
+                    return@RegisteredTool CallToolResult(
+                        content = listOf(TextContent("text is required")),
+                        isError = true
+                    )
+                }
+
+                val result = ToolSupport.runCommand(
+                    sessionManager = sessionManager,
+                    request = request,
                     deviceId = deviceId,
-                    platform = null
-                ) { session ->
-                    val command = InputTextCommand(
+                    command = InputTextCommand(
                         text = text,
                         label = null,
-                        optional = false
-                    )
-                    
-                    val orchestra = Orchestra(session.maestro)
-                    runBlocking {
-                        orchestra.runFlow(listOf(MaestroCommand(command = command)))
-                    }
-                    
-                    buildJsonObject {
-                        put("success", true)
-                        put("device_id", deviceId)
-                        put("text", text)
-                        put("message", "Text input successful")
-                    }.toString()
-                }
-                
+                        optional = false,
+                    ),
+                    message = "Text input successful",
+                    extra = { put("text", text) },
+                )
+
+
                 CallToolResult(content = listOf(TextContent(result)))
             } catch (e: Exception) {
                 CallToolResult(

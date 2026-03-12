@@ -11,6 +11,7 @@ import maestro.orchestra.AddMediaCommand
 import maestro.orchestra.AirplaneValue
 import maestro.orchestra.ApplyConfigurationCommand
 import maestro.orchestra.AssertConditionCommand
+import maestro.orchestra.AssertNoneVisibleNowCommand
 import maestro.orchestra.BackPressCommand
 import maestro.orchestra.ClearKeychainCommand
 import maestro.orchestra.ClearStateCommand
@@ -18,6 +19,7 @@ import maestro.orchestra.Command
 import maestro.orchestra.Condition
 import maestro.orchestra.CopyTextFromCommand
 import maestro.orchestra.DefineVariablesCommand
+import maestro.orchestra.DismissKnownOverlaysCommand
 import maestro.orchestra.ElementSelector
 import maestro.orchestra.EraseTextCommand
 import maestro.orchestra.EvalScriptCommand
@@ -48,6 +50,7 @@ import maestro.orchestra.StopAppCommand
 import maestro.orchestra.StopRecordingCommand
 import maestro.orchestra.SwipeCommand
 import maestro.orchestra.TakeScreenshotCommand
+import maestro.orchestra.TapFirstVisibleNowCommand
 import maestro.orchestra.TapOnElementCommand
 import maestro.orchestra.TapOnPointV2Command
 import maestro.orchestra.ToggleAirplaneModeCommand
@@ -776,6 +779,108 @@ internal class YamlCommandReaderTest {
             SetPermissionsCommand(
                 appId = "com.example.app",
                 permissions = mapOf("all" to "deny", "notifications" to "unset")
+            ),
+        )
+    }
+
+    @Test
+    fun `runFlow when supports zero-wait visibility guards`() {
+        val flow = """
+            appId: com.example.app
+            ---
+            - runFlow:
+                when:
+                  visibleNow:
+                    id: overlay
+                  notVisibleNow:
+                    text: Loading
+                  conditionTimeoutMs: 0
+                commands:
+                  - back
+        """.trimIndent()
+
+        val commands = YamlCommandReader.readCommands(Paths.get("/tmp/visible-now-flow.yaml"), flow)
+            .mapNotNull { it.asCommand() }
+
+        assertThat(commands).hasSize(2)
+        val runFlow = commands[1] as RunFlowCommand
+        assertThat(runFlow.condition).isEqualTo(
+            Condition(
+                visibleNow = ElementSelector(idRegex = "overlay"),
+                notVisibleNow = ElementSelector(textRegex = "Loading"),
+                conditionTimeoutMs = 0L,
+            ),
+        )
+    }
+
+    @Test
+    fun `yaml supports dismissKnownOverlays and zero-time assert commands`() {
+        val flow = """
+            appId: com.example.app
+            ---
+            - dismissKnownOverlays:
+                maxPasses: 3
+            - tapFirstVisibleNow:
+                selectors:
+                  - id: continue
+                  - text: OK
+            - assertVisibleNow:
+                id: home-tab-chats
+            - assertNotVisibleNow:
+                text: app_check_rejected
+        """.trimIndent()
+
+        val commands = YamlCommandReader.readCommands(Paths.get("/tmp/fast-primitives.yaml"), flow)
+            .mapNotNull { it.asCommand() }
+
+        assertThat(commands).hasSize(5)
+        assertThat(commands[1]).isEqualTo(
+            DismissKnownOverlaysCommand(maxPasses = 3),
+        )
+        assertThat(commands[2]).isEqualTo(
+            TapFirstVisibleNowCommand(
+                selectors = listOf(
+                    ElementSelector(idRegex = "continue"),
+                    ElementSelector(textRegex = "OK"),
+                ),
+            ),
+        )
+        assertThat(commands[3]).isEqualTo(
+            AssertConditionCommand(
+                condition = Condition(visibleNow = ElementSelector(idRegex = "home-tab-chats")),
+                timeout = "0",
+            ),
+        )
+        assertThat(commands[4]).isEqualTo(
+            AssertConditionCommand(
+                condition = Condition(notVisibleNow = ElementSelector(textRegex = "app_check_rejected")),
+                timeout = "0",
+            ),
+        )
+    }
+
+    @Test
+    fun `yaml supports batched zero-time negative asserts`() {
+        val flow = """
+            appId: com.example.app
+            ---
+            - assertNoneVisibleNow:
+                - text: Render Error
+                - text: Unable to resolve module
+                - id: backend_unreachable
+        """.trimIndent()
+
+        val commands = YamlCommandReader.readCommands(Paths.get("/tmp/assert-none-visible-now.yaml"), flow)
+            .mapNotNull { it.asCommand() }
+
+        assertThat(commands).hasSize(2)
+        assertThat(commands[1]).isEqualTo(
+            AssertNoneVisibleNowCommand(
+                selectors = listOf(
+                    ElementSelector(textRegex = "Render Error"),
+                    ElementSelector(textRegex = "Unable to resolve module"),
+                    ElementSelector(idRegex = "backend_unreachable"),
+                ),
             ),
         )
     }

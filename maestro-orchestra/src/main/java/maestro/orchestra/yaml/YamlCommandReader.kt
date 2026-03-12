@@ -40,6 +40,10 @@ object YamlCommandReader {
         MaestroFlowParser.parseFlow(flowPath, flow)
     }
 
+    fun readCommands(flowPath: Path, flow: String): List<MaestroCommand> = mapParsingErrors(flowPath) {
+        MaestroFlowParser.parseFlow(flowPath, flow)
+    }
+
     fun readSingleCommand(flowPath: Path, appId: String, command: String): List<MaestroCommand> = mapParsingErrors(flowPath) {
         MaestroFlowParser.parseCommand(flowPath, appId, command)
     }

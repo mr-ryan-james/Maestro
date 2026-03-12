@@ -110,4 +110,73 @@ interface Driver {
         return listOf()
     }
 
+    fun automationSnapshot(
+        request: AutomationSnapshotRequest = AutomationSnapshotRequest(),
+    ): AutomationSnapshot {
+        return contentDescriptor(excludeKeyboardElements = request.excludeKeyboardElements)
+            .toAutomationSnapshot(request)
+    }
+
+    fun queryAutomationElements(
+        request: AutomationQueryRequest,
+    ): AutomationQueryResult {
+        return contentDescriptor(excludeKeyboardElements = request.excludeKeyboardElements)
+            .queryAutomationElements(request)
+    }
+
+    fun awaitAutomation(
+        request: AutomationWaitRequest,
+    ): AutomationWaitResult {
+        val startedAt = System.currentTimeMillis()
+        var lastSnapshot: AutomationSnapshot? = null
+
+        while (true) {
+            val queryRequest = AutomationQueryRequest(
+                selectors = request.selectors,
+                interactiveOnly = request.interactiveOnly,
+                fields = request.fields,
+                maxDepth = request.maxDepth,
+                includeStatusBars = request.includeStatusBars,
+                includeSafariWebViews = request.includeSafariWebViews,
+                excludeKeyboardElements = request.excludeKeyboardElements,
+            )
+            val queryResult = queryAutomationElements(queryRequest)
+            val anyMatchVisible = queryResult.matches.any { it.matchCount > 0 }
+            val satisfied = if (request.notVisible) !anyMatchVisible else anyMatchVisible
+
+            if (satisfied) {
+                lastSnapshot = automationSnapshot(
+                    AutomationSnapshotRequest(
+                        mode = AutomationSnapshotMode.MINIMAL,
+                        interactiveOnly = request.interactiveOnly,
+                        fields = request.fields,
+                        maxDepth = request.maxDepth,
+                        includeStatusBars = request.includeStatusBars,
+                        includeSafariWebViews = request.includeSafariWebViews,
+                        excludeKeyboardElements = request.excludeKeyboardElements,
+                    ),
+                )
+                return AutomationWaitResult(
+                    satisfied = true,
+                    source = queryResult.source,
+                    elapsedMs = System.currentTimeMillis() - startedAt,
+                    token = queryResult.token,
+                    snapshot = lastSnapshot,
+                )
+            }
+
+            if (System.currentTimeMillis() - startedAt >= request.timeoutMs) {
+                return AutomationWaitResult(
+                    satisfied = false,
+                    source = queryResult.source,
+                    elapsedMs = System.currentTimeMillis() - startedAt,
+                    token = queryResult.token,
+                    snapshot = lastSnapshot,
+                )
+            }
+
+            Thread.sleep(request.pollIntervalMs.coerceAtLeast(25L))
+        }
+    }
+
 }
