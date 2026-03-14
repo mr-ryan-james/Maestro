@@ -3,6 +3,7 @@ package maestro.cli.daemon
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
+import io.modelcontextprotocol.kotlin.sdk.CallToolRequest
 import io.ktor.server.application.call
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
@@ -22,16 +23,13 @@ import io.ktor.server.websocket.webSocket
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
 import java.io.File
-import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.Paths
 import java.util.UUID
 import kotlin.system.measureTimeMillis
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -45,23 +43,23 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
+import maestro.AutomationNode
 import maestro.AutomationQueryMatch
 import maestro.AutomationQueryRequest
+import maestro.AutomationQueryResult
 import maestro.AutomationSelector
+import maestro.AutomationSnapshot
 import maestro.AutomationSnapshotMode
 import maestro.AutomationSnapshotRequest
 import maestro.AutomationWaitRequest
 import maestro.DEFAULT_AUTOMATION_FIELDS
 import maestro.KeyCode
-import maestro.ScrollDirection
 import maestro.cli.mcp.McpSessionRegistry
-import maestro.cli.mcp.tools.CompiledFlowCache
+import maestro.cli.mcp.tools.ProjectToolSupport
 import maestro.cli.mcp.tools.ToolSupport
-import maestro.cli.report.TestDebugReporter
 import maestro.cli.session.MaestroSessionManager
 import maestro.cli.util.WorkingDirectory
 import maestro.debuglog.LiveTraceLogger
-import maestro.orchestra.Command
 import maestro.orchestra.Condition
 import maestro.orchestra.DismissKnownOverlaysCommand
 import maestro.orchestra.ElementSelector
@@ -72,13 +70,9 @@ import maestro.orchestra.OpenLinkCommand
 import maestro.orchestra.Orchestra
 import maestro.orchestra.PressKeyCommand
 import maestro.orchestra.ScrollCommand
-import maestro.orchestra.SwipeCommand
 import maestro.orchestra.TapFirstVisibleNowCommand
 import maestro.orchestra.TapOnElementCommand
 import maestro.orchestra.WaitForAnimationToEndCommand
-import maestro.orchestra.util.Env.withDefaultEnvVars
-import maestro.orchestra.util.Env.withEnv
-import maestro.orchestra.util.Env.withInjectedShellEnvVars
 import maestro.utils.MaestroRunMetadata
 import org.slf4j.LoggerFactory
 
@@ -108,6 +102,76 @@ fun runMaestroDaemonServer(port: Int) {
                 call.respondJson(sessionListJson())
             }
 
+            post("/api/bridge_state") {
+                val body = call.receiveJsonObject()
+                val sessionHandle = body.stringValue("session_id")?.let { requiredSessionHandle(body) }
+                val appId = body.stringValue("app_id", "appId") ?: sessionHandle?.appId
+                    ?: error("app_id or session_id is required")
+                val state = DaemonBridgeRegistry.semanticState(appId)
+                call.respondJson(
+                    buildJsonObject {
+                        put("ok", JsonPrimitive(state != null))
+                        put("app_id", JsonPrimitive(appId))
+                        put("bridge_connected", JsonPrimitive(state != null))
+                        state?.let { put("state", semanticStateJson(it)) }
+                    },
+                )
+            }
+
+            post("/api/disconnect_bridge") {
+                val body = call.receiveJsonObject()
+                val sessionHandle = body.stringValue("session_id")?.let { requiredSessionHandle(body) }
+                val appId = body.stringValue("app_id", "appId") ?: sessionHandle?.appId
+                    ?: error("app_id or session_id is required")
+                val suppressMs = body.longValue("suppress_ms", "suppressMs") ?: 1_500L
+                val disconnected = DaemonBridgeRegistry.disconnect(appId, suppressMs)
+                call.respondJson(
+                    buildJsonObject {
+                        put("ok", JsonPrimitive(disconnected))
+                        put("app_id", JsonPrimitive(appId))
+                        put("bridge_connected", JsonPrimitive(DaemonBridgeRegistry.isConnected(appId)))
+                        DaemonBridgeRegistry.suppressionUntil(appId)?.let {
+                            put("semantic_suppressed_until_ms", JsonPrimitive(it))
+                        }
+                    },
+                )
+            }
+
+            post("/api/list_flows") {
+                val body = call.receiveJsonObject()
+                call.respondJson(ProjectToolSupport.listFlows(CallToolRequest(name = "list_flows", arguments = body)))
+            }
+
+            post("/api/analyze_flow") {
+                val body = call.receiveJsonObject()
+                call.respondJson(ProjectToolSupport.analyzeFlow(CallToolRequest(name = "analyze_flow", arguments = body)))
+            }
+
+            post("/api/validate_testids") {
+                val body = call.receiveJsonObject()
+                call.respondJson(ProjectToolSupport.validateTestIds(CallToolRequest(name = "validate_testids", arguments = body)))
+            }
+
+            post("/api/suggest_selectors") {
+                val body = call.receiveJsonObject()
+                call.respondJson(
+                    ProjectToolSupport.suggestSelectors(
+                        MaestroSessionManager,
+                        CallToolRequest(name = "suggest_selectors", arguments = body),
+                    ),
+                )
+            }
+
+            post("/api/run_flow_with_diagnostics") {
+                val body = call.receiveJsonObject()
+                call.respondJson(
+                    ProjectToolSupport.runFlowWithDiagnostics(
+                        MaestroSessionManager,
+                        CallToolRequest(name = "run_flow_with_diagnostics", arguments = body),
+                    ),
+                )
+            }
+
             post("/api/open_session") {
                 val body = call.receiveJsonObject()
                 val deviceId = body.stringValue("device_id")
@@ -135,6 +199,7 @@ fun runMaestroDaemonServer(port: Int) {
                     ?: error("session_id is required")
                 val handle = McpSessionRegistry.resumeSession(
                     sessionId = sessionId,
+                    sessionManager = MaestroSessionManager,
                     ttlMsOverride = body.longValue("ttl_ms"),
                 ) ?: throw IllegalStateException("Unknown or expired session_id: $sessionId")
                 call.respondJson(sessionJson(handle))
@@ -176,14 +241,38 @@ fun runMaestroDaemonServer(port: Int) {
                 val body = call.receiveJsonObject()
                 val sessionHandle = requiredSessionHandle(body)
                 val request = buildSnapshotRequest(body)
-                val snapshot = McpSessionRegistry.withSession(sessionHandle.sessionId) { session ->
+                val sourcePreference = body.stringValue("source_preference", "sourcePreference")
+                val semanticResolution = DaemonSemanticAutomation.resolveSnapshot(
+                    state = DaemonBridgeRegistry.semanticState(sessionHandle.appId),
+                    request = request,
+                    sourcePreference = sourcePreference,
+                )
+                val snapshot = semanticResolution.snapshot ?: McpSessionRegistry.withSession(sessionHandle.sessionId) { session ->
                     session.maestro.driver.automationSnapshot(request)
                 }
+                LiveTraceLogger.note(
+                    event = "AUTOMATION_SNAPSHOT",
+                    detail = buildString {
+                        append("source=")
+                        append(snapshot.source)
+                        append(" requestedSourcePreference=")
+                        append(semanticResolution.requestedSourcePreference)
+                        semanticResolution.fallbackReason?.let {
+                            append(" fallbackReason=")
+                            append(it)
+                        }
+                    },
+                )
                 call.respondJson(
-                    ToolSupport.automationSnapshotJson(
-                        deviceId = sessionHandle.deviceId,
-                        sessionId = sessionHandle.sessionId,
-                        snapshot = snapshot,
+                    enrichAutomationSnapshotJson(
+                        base = ToolSupport.automationSnapshotJson(
+                            deviceId = sessionHandle.deviceId,
+                            sessionId = sessionHandle.sessionId,
+                            snapshot = snapshot,
+                        ),
+                        requestedSourcePreference = semanticResolution.requestedSourcePreference,
+                        fallbackReason = semanticResolution.fallbackReason,
+                        bridgeConnected = DaemonBridgeRegistry.isConnected(sessionHandle.appId),
                     ),
                 )
             }
@@ -193,14 +282,38 @@ fun runMaestroDaemonServer(port: Int) {
                 val sessionHandle = requiredSessionHandle(body)
                 val request = buildQueryRequest(body)
                     ?: error("selectors or selector.id/selector.text is required")
-                val result = McpSessionRegistry.withSession(sessionHandle.sessionId) { session ->
+                val sourcePreference = body.stringValue("source_preference", "sourcePreference")
+                val semanticResolution = DaemonSemanticAutomation.resolveQuery(
+                    state = DaemonBridgeRegistry.semanticState(sessionHandle.appId),
+                    request = request,
+                    sourcePreference = sourcePreference,
+                )
+                val result = semanticResolution.result ?: McpSessionRegistry.withSession(sessionHandle.sessionId) { session ->
                     session.maestro.driver.queryAutomationElements(request)
                 }
+                LiveTraceLogger.note(
+                    event = "AUTOMATION_QUERY",
+                    detail = buildString {
+                        append("source=")
+                        append(result.source)
+                        append(" requestedSourcePreference=")
+                        append(semanticResolution.requestedSourcePreference)
+                        semanticResolution.fallbackReason?.let {
+                            append(" fallbackReason=")
+                            append(it)
+                        }
+                    },
+                )
                 call.respondJson(
-                    ToolSupport.automationQueryJson(
-                        deviceId = sessionHandle.deviceId,
-                        sessionId = sessionHandle.sessionId,
-                        result = result,
+                    enrichAutomationQueryJson(
+                        base = ToolSupport.automationQueryJson(
+                            deviceId = sessionHandle.deviceId,
+                            sessionId = sessionHandle.sessionId,
+                            result = result,
+                        ),
+                        requestedSourcePreference = semanticResolution.requestedSourcePreference,
+                        fallbackReason = semanticResolution.fallbackReason,
+                        bridgeConnected = DaemonBridgeRegistry.isConnected(sessionHandle.appId),
                     ),
                 )
             }
@@ -308,6 +421,10 @@ private fun sessionJson(handle: McpSessionRegistry.SessionHandle): JsonObject = 
     put("last_used_at", JsonPrimitive(handle.lastUsedAt))
     put("ttl_ms", JsonPrimitive(handle.ttlMs))
     put("reused", JsonPrimitive(handle.reused))
+    put("health_state", JsonPrimitive(handle.healthState))
+    handle.lastHealthCheckAt?.let { put("last_health_check_at_ms", JsonPrimitive(it)) }
+    handle.lastFailureReason?.let { put("last_failure_reason", JsonPrimitive(it)) }
+    handle.repairedFromSessionId?.let { put("repaired_from_session_id", JsonPrimitive(it)) }
     put("bridge_connected", JsonPrimitive(DaemonBridgeRegistry.isConnected(handle.appId)))
 }
 
@@ -335,6 +452,34 @@ private fun buildSnapshotRequest(body: JsonObject): AutomationSnapshotRequest {
         excludeKeyboardElements = body.booleanValue("exclude_keyboard_elements", "excludeKeyboardElements") ?: false,
         sinceToken = body.stringValue("since_token", "sinceToken"),
     )
+}
+
+private fun enrichAutomationSnapshotJson(
+    base: JsonObject,
+    requestedSourcePreference: String,
+    fallbackReason: String?,
+    bridgeConnected: Boolean,
+): JsonObject {
+    return buildJsonObject {
+        base.forEach { (key, value) -> put(key, value) }
+        put("requested_source_preference", JsonPrimitive(requestedSourcePreference))
+        put("bridge_connected", JsonPrimitive(bridgeConnected))
+        fallbackReason?.let { put("fallback_reason", JsonPrimitive(it)) }
+    }
+}
+
+private fun enrichAutomationQueryJson(
+    base: JsonObject,
+    requestedSourcePreference: String,
+    fallbackReason: String?,
+    bridgeConnected: Boolean,
+): JsonObject {
+    return buildJsonObject {
+        base.forEach { (key, value) -> put(key, value) }
+        put("requested_source_preference", JsonPrimitive(requestedSourcePreference))
+        put("bridge_connected", JsonPrimitive(bridgeConnected))
+        fallbackReason?.let { put("fallback_reason", JsonPrimitive(it)) }
+    }
 }
 
 private fun buildQueryRequest(body: JsonObject): AutomationQueryRequest? {
@@ -622,84 +767,19 @@ private fun runCompiledFlow(
     val env = body.objectValue("env")
     val debugOutputDir = body.stringValue("debug_output_dir")
     val testOutputDir = body.stringValue("test_output_dir")
-    val flowPath = resolveFlowPath(sessionHandle.projectRoot, flowPathRaw)
+    val flowPath = ProjectToolSupport.resolvePath(sessionHandle.projectRoot, flowPathRaw)
     val flowFile = flowPath.toFile()
     if (!flowFile.exists()) {
         error("Flow file not found: ${flowFile.absolutePath}")
     }
 
-    initializeRunMetadata(sessionHandle.owner, sessionHandle.label)
-    installDebugOutputs(debugOutputDir, testOutputDir)
-
-    val compiled = CompiledFlowCache.compileFlowFile(
-        flowPath = flowPath,
+    return ProjectToolSupport.runCompiledFlowDirect(
+        sessionHandle = sessionHandle,
+        flowPathRaw = flowPathRaw,
         env = env,
-        projectIndexVersion = projectIndexVersion(sessionHandle.projectRoot),
+        debugOutputDir = debugOutputDir,
+        testOutputDir = testOutputDir,
     )
-    val finalEnv = env
-        .withInjectedShellEnvVars()
-        .withDefaultEnvVars(flowFile, sessionHandle.deviceId)
-
-    val commands = compiled.commands.withEnv(finalEnv)
-    val flowName = flowFile.nameWithoutExtension
-    var flowSucceeded = false
-    var flowError: Throwable? = null
-    val elapsedMs = measureTimeMillis {
-        try {
-            McpSessionRegistry.withSession(sessionHandle.sessionId) { session ->
-                val orchestra = daemonOrchestra(session.maestro, flowName, flowFile)
-                flowSucceeded = runBlocking {
-                    orchestra.runFlow(commands)
-                }
-            }
-        } catch (error: Throwable) {
-            flowError = error
-            flowSucceeded = false
-            daemonLogger.warn(
-                "Compiled flow failed sessionId={} flowPath={}",
-                sessionHandle.sessionId,
-                flowFile.absolutePath,
-                error,
-            )
-        }
-    }
-    LiveTraceLogger.flowCompleted(
-        flowName,
-        flowSucceeded,
-        buildString {
-            append("compiledFlowMs=")
-            append(elapsedMs)
-            flowError?.message?.let {
-                append(" error=")
-                append(it)
-            }
-        },
-    )
-
-    return buildJsonObject {
-        put("ok", JsonPrimitive(flowSucceeded))
-        put("success", JsonPrimitive(flowSucceeded))
-        put("status", JsonPrimitive(if (flowSucceeded) "passed" else "failed"))
-        put("exitCode", JsonPrimitive(if (flowSucceeded) 0 else 1))
-        put("session_id", JsonPrimitive(sessionHandle.sessionId))
-        put("device_id", JsonPrimitive(sessionHandle.deviceId))
-        put("flow_path", JsonPrimitive(flowFile.absolutePath))
-        put("commands_executed", JsonPrimitive(compiled.commands.size))
-        put("compiled_flow_ms", JsonPrimitive(elapsedMs))
-        put("flow_hash", JsonPrimitive(compiled.flowHash))
-        put("env_hash", JsonPrimitive(compiled.envHash))
-        put("project_index_version", JsonPrimitive(compiled.projectIndexVersion))
-        put("compiled_at_ms", JsonPrimitive(compiled.compiledAtMs))
-        TestDebugReporter.getLiveTracePath()?.let { put("live_trace_path", JsonPrimitive(it.toAbsolutePath().toString())) }
-        TestDebugReporter.getLiveStatusPath()?.let { put("live_status_path", JsonPrimitive(it.toAbsolutePath().toString())) }
-        put(
-            "env",
-            buildJsonObject {
-                finalEnv.forEach { (key, value) -> put(key, JsonPrimitive(value)) }
-            },
-        )
-        flowError?.let { put("error", JsonPrimitive(it.message ?: it::class.simpleName ?: "unknown error")) }
-    }
 }
 
 private fun runLegacyDaemonRun(body: JsonObject): JsonObject {
@@ -746,12 +826,108 @@ private fun runLegacyDaemonRun(body: JsonObject): JsonObject {
     }
 }
 
-private suspend fun runMacro(
+internal suspend fun runMacro(
     sessionHandle: McpSessionRegistry.SessionHandle,
     body: JsonObject,
 ): JsonObject {
     val macro = normalizeBatchActionType(body.stringValue("macro") ?: error("macro is required"))
     val args = body["args"]?.jsonObject ?: buildJsonObject { }
+
+    suspend fun awaitBridgeCommandCompletion(
+        commandId: String,
+        timeoutMs: Long,
+        commandName: String? = null,
+    ): DaemonBridgeRegistry.CommandResult {
+        val result = awaitDaemonEvent(
+            sessionHandle = sessionHandle,
+            event = buildJsonObject {
+                put("kind", JsonPrimitive("bridge_command_completed"))
+                put("command_id", JsonPrimitive(commandId))
+                put("status", JsonPrimitive("succeeded"))
+                commandName?.let { put("command_name", JsonPrimitive(it)) }
+            },
+            timeoutMs = timeoutMs,
+            pollIntervalMs = 100L,
+        )
+        val ok = result["ok"]?.jsonPrimitive?.booleanOrNull == true
+        return DaemonBridgeRegistry.CommandResult(
+            id = commandId,
+            ok = ok,
+            error = if (ok) null else "Bridge command did not complete: ${commandName ?: commandId}",
+            route = result["details"]?.jsonObject?.stringValue("route"),
+            userId = result["details"]?.jsonObject?.stringValue("user_id"),
+            firebaseUid = result["details"]?.jsonObject?.stringValue("firebase_uid"),
+            stateVersion = result["details"]?.jsonObject?.longValue("state_version"),
+        )
+    }
+
+    suspend fun sendBridgeCommandWithRecovery(
+        appId: String,
+        kind: String,
+        commandId: String,
+        timeoutMs: Long,
+        commandName: String? = null,
+        args: Map<String, Any?> = emptyMap(),
+    ): DaemonBridgeRegistry.CommandResult {
+        val initial = DaemonBridgeRegistry.sendCommand(
+            appId = appId,
+            kind = kind,
+            args = args,
+            timeoutMs = timeoutMs,
+            commandIdOverride = commandId,
+        )
+        if (initial.ok) {
+            return initial
+        }
+
+        val errorMessage = initial.error?.lowercase().orEmpty()
+        val shouldRecover =
+            errorMessage.contains("bridge disconnected") ||
+                errorMessage.contains("timed out")
+        if (!shouldRecover) {
+            return initial
+        }
+
+        val recovered = awaitBridgeCommandCompletion(
+            commandId = commandId,
+            timeoutMs = timeoutMs.coerceAtLeast(1_000L),
+            commandName = commandName,
+        )
+        return if (recovered.ok) recovered else initial
+    }
+
+    fun featureFlagsMap(): Map<String, Any?> {
+        val source = args["feature_flags"]?.jsonObject ?: args["featureFlags"]?.jsonObject ?: return emptyMap()
+        return source.entries.associate { (key, value) ->
+            key to when {
+                value is JsonPrimitive && value.isString -> value.contentOrNull
+                value is JsonPrimitive && value.booleanOrNull != null -> value.booleanOrNull
+                value is JsonPrimitive && value.longOrNull != null -> value.longOrNull
+                value is JsonPrimitive && value.doubleOrNull != null -> value.doubleOrNull
+                value is JsonPrimitive -> value.contentOrNull
+                else -> value.toString()
+            }
+        }
+    }
+
+    fun genericObjectMap(vararg keys: String): Map<String, Any?> {
+        val source = keys
+            .asSequence()
+            .mapNotNull { key -> args[key]?.jsonObject }
+            .firstOrNull()
+            ?: return emptyMap()
+        return source.entries.associate { (key, value) ->
+            key to when {
+                value is JsonPrimitive && value.isString -> value.contentOrNull
+                value is JsonPrimitive && value.booleanOrNull != null -> value.booleanOrNull
+                value is JsonPrimitive && value.longOrNull != null -> value.longOrNull
+                value is JsonPrimitive && value.doubleOrNull != null -> value.doubleOrNull
+                value is JsonPrimitive -> value.contentOrNull
+                else -> value.toString()
+            }
+        }
+    }
+
     return when (macro) {
         "dismiss_known_overlays" -> {
             McpSessionRegistry.withSession(sessionHandle.sessionId) { session ->
@@ -777,12 +953,50 @@ private suspend fun runMacro(
             }
         }
 
+        "open_route" -> {
+            val route = args.stringValue("route") ?: "chats"
+            val commandId = args.stringValue("command_id", "commandId")
+                ?: "open-route-${route.lowercase()}-${System.currentTimeMillis()}"
+            val timeoutMs = args.longValue("timeout_ms", "timeoutMs") ?: 15_000L
+            val result = if (!sessionHandle.appId.isNullOrBlank() && DaemonBridgeRegistry.isConnected(sessionHandle.appId)) {
+                sendBridgeCommandWithRecovery(
+                    appId = sessionHandle.appId,
+                    kind = "openRoute",
+                    commandId = commandId,
+                    timeoutMs = timeoutMs,
+                    commandName = "openRoute",
+                    args = mapOf(
+                        "route" to route,
+                        "commandId" to commandId,
+                        "waitForNavigationMs" to (args.intValue("wait_for_navigation_ms", "waitForNavigationMs") ?: 15_000),
+                    ),
+                )
+            } else {
+                openDeepLink(
+                    sessionHandle,
+                    "thrivify://automation/openRoute?route=${urlEncode(route)}&commandId=$commandId",
+                )
+                awaitBridgeCommandCompletion(commandId, timeoutMs, "openRoute")
+            }
+            buildJsonObject {
+                put("ok", JsonPrimitive(result.ok))
+                put("macro", JsonPrimitive(macro))
+                put("command_id", JsonPrimitive(commandId))
+                put("route", JsonPrimitive(route))
+                result.error?.let { put("error", JsonPrimitive(it)) }
+                put("summary", JsonPrimitive(if (result.ok) "Opened route." else "Failed to open route."))
+            }
+        }
+
         "open_chats" -> {
             val commandId = args.stringValue("command_id") ?: "open-chats-${System.currentTimeMillis()}"
             val result = if (!sessionHandle.appId.isNullOrBlank() && DaemonBridgeRegistry.isConnected(sessionHandle.appId)) {
-                DaemonBridgeRegistry.sendCommand(
+                sendBridgeCommandWithRecovery(
                     appId = sessionHandle.appId,
                     kind = "openRoute",
+                    commandId = commandId,
+                    timeoutMs = 15_000L,
+                    commandName = "openRoute",
                     args = mapOf("route" to "chats", "commandId" to commandId),
                 )
             } else {
@@ -808,16 +1022,19 @@ private suspend fun runMacro(
                 ?: error("run_macro.args.conversationId is required")
             val commandId = args.stringValue("command_id", "commandId")
                 ?: "open-conversation-${System.currentTimeMillis()}"
+            val timeoutMs = args.longValue("timeout_ms", "timeoutMs") ?: 20_000L
             val result = if (!sessionHandle.appId.isNullOrBlank() && DaemonBridgeRegistry.isConnected(sessionHandle.appId)) {
-                DaemonBridgeRegistry.sendCommand(
+                sendBridgeCommandWithRecovery(
                     appId = sessionHandle.appId,
                     kind = "openConversation",
+                    commandId = commandId,
+                    timeoutMs = timeoutMs,
+                    commandName = "openConversation",
                     args = mapOf(
                         "conversationId" to conversationId,
                         "commandId" to commandId,
                         "waitForNavigationMs" to (args.intValue("wait_for_navigation_ms", "waitForNavigationMs") ?: 15_000),
                     ),
-                    timeoutMs = (args.longValue("timeout_ms", "timeoutMs") ?: 20_000L),
                 )
             } else {
                 openDeepLink(
@@ -830,7 +1047,7 @@ private suspend fun runMacro(
                         put("kind", JsonPrimitive("conversation_ready"))
                         put("conversation_id", JsonPrimitive(conversationId))
                     },
-                    timeoutMs = args.longValue("timeout_ms", "timeoutMs") ?: 20_000L,
+                    timeoutMs = timeoutMs,
                     pollIntervalMs = 100L,
                 )
                 DaemonBridgeRegistry.CommandResult(id = commandId, ok = true, route = "ChatView")
@@ -852,17 +1069,20 @@ private suspend fun runMacro(
             val route = args.stringValue("route") ?: "chats"
             val commandId = args.stringValue("command_id", "commandId")
                 ?: "ensure-logged-in-fast-${System.currentTimeMillis()}"
+            val timeoutMs = args.longValue("timeout_ms", "timeoutMs") ?: 20_000L
             val result = if (!sessionHandle.appId.isNullOrBlank() && DaemonBridgeRegistry.isConnected(sessionHandle.appId)) {
-                DaemonBridgeRegistry.sendCommand(
+                sendBridgeCommandWithRecovery(
                     appId = sessionHandle.appId,
                     kind = "bootstrapAuth",
+                    commandId = commandId,
+                    timeoutMs = timeoutMs,
+                    commandName = "bootstrap",
                     args = mapOf(
                         "customToken" to customToken,
                         "route" to route,
                         "commandId" to commandId,
                         "waitForNavigationMs" to (args.intValue("wait_for_navigation_ms", "waitForNavigationMs") ?: 15_000),
                     ),
-                    timeoutMs = (args.longValue("timeout_ms", "timeoutMs") ?: 20_000L),
                 )
             } else {
                 val encodedToken = urlEncode(customToken)
@@ -884,6 +1104,351 @@ private suspend fun runMacro(
             }
         }
 
+        "dismiss_debug_ui" -> {
+            val commandId = args.stringValue("command_id", "commandId")
+                ?: "dismiss-debug-ui-${System.currentTimeMillis()}"
+            val timeoutMs = args.longValue("timeout_ms", "timeoutMs") ?: 10_000L
+            val result = if (!sessionHandle.appId.isNullOrBlank() && DaemonBridgeRegistry.isConnected(sessionHandle.appId)) {
+                sendBridgeCommandWithRecovery(
+                    appId = sessionHandle.appId,
+                    kind = "dismissDebugUi",
+                    commandId = commandId,
+                    timeoutMs = timeoutMs,
+                    commandName = "dismissDebugUi",
+                    args = mapOf("commandId" to commandId),
+                )
+            } else {
+                openDeepLink(
+                    sessionHandle,
+                    "thrivify://automation/dismissDebugUi?commandId=$commandId",
+                )
+                awaitBridgeCommandCompletion(commandId, timeoutMs, "dismissDebugUi")
+            }
+            buildJsonObject {
+                put("ok", JsonPrimitive(result.ok))
+                put("macro", JsonPrimitive(macro))
+                put("command_id", JsonPrimitive(commandId))
+                result.route?.let { put("route", JsonPrimitive(it)) }
+                result.error?.let { put("error", JsonPrimitive(it)) }
+                put("summary", JsonPrimitive(if (result.ok) "Dismissed debug UI." else "Failed to dismiss debug UI."))
+            }
+        }
+
+        "set_feature_flags" -> {
+            val featureFlags = featureFlagsMap()
+            val commandId = args.stringValue("command_id", "commandId")
+                ?: "set-feature-flags-${System.currentTimeMillis()}"
+            val timeoutMs = args.longValue("timeout_ms", "timeoutMs") ?: 10_000L
+            val result = if (!sessionHandle.appId.isNullOrBlank() && DaemonBridgeRegistry.isConnected(sessionHandle.appId)) {
+                sendBridgeCommandWithRecovery(
+                    appId = sessionHandle.appId,
+                    kind = "setFeatureFlags",
+                    commandId = commandId,
+                    timeoutMs = timeoutMs,
+                    commandName = "setFeatureFlags",
+                    args = mapOf(
+                        "commandId" to commandId,
+                        "featureFlags" to featureFlags,
+                    ),
+                )
+            } else {
+                val featureFlagsQuery = featureFlags.entries.joinToString(",") { (key, value) ->
+                    "$key=${value?.toString() ?: "null"}"
+                }
+                openDeepLink(
+                    sessionHandle,
+                    "thrivify://automation/setFeatureFlags?commandId=$commandId&featureFlags=${urlEncode(featureFlagsQuery)}",
+                )
+                awaitBridgeCommandCompletion(commandId, timeoutMs, "setFeatureFlags")
+            }
+            buildJsonObject {
+                put("ok", JsonPrimitive(result.ok))
+                put("macro", JsonPrimitive(macro))
+                put("command_id", JsonPrimitive(commandId))
+                put(
+                    "feature_flags",
+                    buildJsonObject {
+                        featureFlags.forEach { (key, value) ->
+                            when (value) {
+                                null -> put(key, JsonPrimitive("null"))
+                                is Boolean -> put(key, JsonPrimitive(value))
+                                is Number -> put(key, JsonPrimitive(value.toDouble()))
+                                else -> put(key, JsonPrimitive(value.toString()))
+                            }
+                        }
+                    },
+                )
+                result.error?.let { put("error", JsonPrimitive(it)) }
+                put("summary", JsonPrimitive(if (result.ok) "Updated feature flags." else "Failed to update feature flags."))
+            }
+        }
+
+        "connect_metro" -> {
+            val commandId = args.stringValue("command_id", "commandId")
+                ?: "connect-metro-${System.currentTimeMillis()}"
+            val timeoutMs = args.longValue("timeout_ms", "timeoutMs") ?: 15_000L
+            val metroUrl = args.stringValue("metro_url", "metroUrl", "url")
+            val result = if (!sessionHandle.appId.isNullOrBlank() && DaemonBridgeRegistry.isConnected(sessionHandle.appId)) {
+                sendBridgeCommandWithRecovery(
+                    appId = sessionHandle.appId,
+                    kind = "connectMetro",
+                    commandId = commandId,
+                    timeoutMs = timeoutMs + 1_000L,
+                    commandName = "connectMetro",
+                    args = buildMap<String, Any?> {
+                        put("commandId", commandId)
+                        metroUrl?.let { put("metroUrl", it) }
+                        put("timeoutMs", timeoutMs)
+                    },
+                )
+            } else {
+                val query = buildString {
+                    append("commandId=$commandId")
+                    metroUrl?.let { append("&metroUrl=${urlEncode(it)}") }
+                    append("&timeoutMs=$timeoutMs")
+                }
+                openDeepLink(sessionHandle, "thrivify://automation/connectMetro?$query")
+                awaitBridgeCommandCompletion(commandId, timeoutMs + 1_000L, "connectMetro")
+            }
+            buildJsonObject {
+                put("ok", JsonPrimitive(result.ok))
+                put("macro", JsonPrimitive(macro))
+                put("command_id", JsonPrimitive(commandId))
+                metroUrl?.let { put("metro_url", JsonPrimitive(it)) }
+                result.route?.let { put("route", JsonPrimitive(it)) }
+                result.error?.let { put("error", JsonPrimitive(it)) }
+                put("summary", JsonPrimitive(if (result.ok) "Connected Metro." else "Failed to connect Metro."))
+            }
+        }
+
+        "set_permissions_state" -> {
+            val permissionsState = genericObjectMap("permissions_state", "permissionsState", "permissions")
+            val commandId = args.stringValue("command_id", "commandId")
+                ?: "set-permissions-state-${System.currentTimeMillis()}"
+            val timeoutMs = args.longValue("timeout_ms", "timeoutMs") ?: 10_000L
+            val result = if (!sessionHandle.appId.isNullOrBlank() && DaemonBridgeRegistry.isConnected(sessionHandle.appId)) {
+                sendBridgeCommandWithRecovery(
+                    appId = sessionHandle.appId,
+                    kind = "setPermissionsState",
+                    commandId = commandId,
+                    timeoutMs = timeoutMs,
+                    commandName = "setPermissionsState",
+                    args = mapOf(
+                        "commandId" to commandId,
+                        "permissionsState" to permissionsState,
+                    ),
+                )
+            } else {
+                val permissionsQuery = permissionsState.entries.joinToString(",") { (key, value) ->
+                    "$key=${value?.toString() ?: "null"}"
+                }
+                openDeepLink(
+                    sessionHandle,
+                    "thrivify://automation/setPermissionsState?commandId=$commandId&permissions=${urlEncode(permissionsQuery)}",
+                )
+                awaitBridgeCommandCompletion(commandId, timeoutMs, "setPermissionsState")
+            }
+            buildJsonObject {
+                put("ok", JsonPrimitive(result.ok))
+                put("macro", JsonPrimitive(macro))
+                put("command_id", JsonPrimitive(commandId))
+                result.error?.let { put("error", JsonPrimitive(it)) }
+                put("summary", JsonPrimitive(if (result.ok) "Updated permissions state." else "Failed to update permissions state."))
+            }
+        }
+
+        "hydrate_fixtures" -> {
+            val fixtures = genericObjectMap("fixtures", "payload")
+            val commandId = args.stringValue("command_id", "commandId")
+                ?: "hydrate-fixtures-${System.currentTimeMillis()}"
+            val timeoutMs = args.longValue("timeout_ms", "timeoutMs") ?: 15_000L
+            val payloadJson = daemonMapper.writeValueAsString(fixtures)
+            val result = if (!sessionHandle.appId.isNullOrBlank() && DaemonBridgeRegistry.isConnected(sessionHandle.appId)) {
+                sendBridgeCommandWithRecovery(
+                    appId = sessionHandle.appId,
+                    kind = "hydrateFixtures",
+                    commandId = commandId,
+                    timeoutMs = timeoutMs,
+                    commandName = "hydrateFixtures",
+                    args = mapOf("commandId" to commandId, "fixtures" to fixtures),
+                )
+            } else {
+                openDeepLink(
+                    sessionHandle,
+                    "thrivify://automation/hydrateFixtures?commandId=$commandId&fixtures=${urlEncode(payloadJson)}",
+                )
+                awaitBridgeCommandCompletion(commandId, timeoutMs, "hydrateFixtures")
+            }
+            buildJsonObject {
+                put("ok", JsonPrimitive(result.ok))
+                put("macro", JsonPrimitive(macro))
+                put("command_id", JsonPrimitive(commandId))
+                result.error?.let { put("error", JsonPrimitive(it)) }
+                put("summary", JsonPrimitive(if (result.ok) "Hydrated fixtures." else "Failed to hydrate fixtures."))
+            }
+        }
+
+        "seed_workspace" -> {
+            val workspace = genericObjectMap("workspace", "payload")
+            val commandId = args.stringValue("command_id", "commandId")
+                ?: "seed-workspace-${System.currentTimeMillis()}"
+            val timeoutMs = args.longValue("timeout_ms", "timeoutMs") ?: 20_000L
+            val payloadJson = daemonMapper.writeValueAsString(workspace)
+            val result = if (!sessionHandle.appId.isNullOrBlank() && DaemonBridgeRegistry.isConnected(sessionHandle.appId)) {
+                sendBridgeCommandWithRecovery(
+                    appId = sessionHandle.appId,
+                    kind = "seedWorkspace",
+                    commandId = commandId,
+                    timeoutMs = timeoutMs,
+                    commandName = "seedWorkspace",
+                    args = mapOf("commandId" to commandId, "workspace" to workspace),
+                )
+            } else {
+                openDeepLink(
+                    sessionHandle,
+                    "thrivify://automation/seedWorkspace?commandId=$commandId&workspace=${urlEncode(payloadJson)}",
+                )
+                awaitBridgeCommandCompletion(commandId, timeoutMs, "seedWorkspace")
+            }
+            buildJsonObject {
+                put("ok", JsonPrimitive(result.ok))
+                put("macro", JsonPrimitive(macro))
+                put("command_id", JsonPrimitive(commandId))
+                result.error?.let { put("error", JsonPrimitive(it)) }
+                put("summary", JsonPrimitive(if (result.ok) "Seeded workspace." else "Failed to seed workspace."))
+            }
+        }
+
+        "apply_realtime_mutation" -> {
+            val mutation = genericObjectMap("mutation", "payload")
+            val commandId = args.stringValue("command_id", "commandId")
+                ?: "apply-realtime-mutation-${System.currentTimeMillis()}"
+            val timeoutMs = args.longValue("timeout_ms", "timeoutMs") ?: 15_000L
+            val payloadJson = daemonMapper.writeValueAsString(mutation)
+            val result = if (!sessionHandle.appId.isNullOrBlank() && DaemonBridgeRegistry.isConnected(sessionHandle.appId)) {
+                sendBridgeCommandWithRecovery(
+                    appId = sessionHandle.appId,
+                    kind = "applyRealtimeMutation",
+                    commandId = commandId,
+                    timeoutMs = timeoutMs,
+                    commandName = "applyRealtimeMutation",
+                    args = mapOf("commandId" to commandId, "mutation" to mutation),
+                )
+            } else {
+                openDeepLink(
+                    sessionHandle,
+                    "thrivify://automation/applyRealtimeMutation?commandId=$commandId&mutation=${urlEncode(payloadJson)}",
+                )
+                awaitBridgeCommandCompletion(commandId, timeoutMs, "applyRealtimeMutation")
+            }
+            buildJsonObject {
+                put("ok", JsonPrimitive(result.ok))
+                put("macro", JsonPrimitive(macro))
+                put("command_id", JsonPrimitive(commandId))
+                result.error?.let { put("error", JsonPrimitive(it)) }
+                put("summary", JsonPrimitive(if (result.ok) "Applied realtime mutation." else "Failed to apply realtime mutation."))
+            }
+        }
+
+        "revert_realtime_mutation" -> {
+            val mutation = genericObjectMap("mutation", "payload")
+            val commandId = args.stringValue("command_id", "commandId")
+                ?: "revert-realtime-mutation-${System.currentTimeMillis()}"
+            val timeoutMs = args.longValue("timeout_ms", "timeoutMs") ?: 15_000L
+            val payloadJson = daemonMapper.writeValueAsString(mutation)
+            val result = if (!sessionHandle.appId.isNullOrBlank() && DaemonBridgeRegistry.isConnected(sessionHandle.appId)) {
+                sendBridgeCommandWithRecovery(
+                    appId = sessionHandle.appId,
+                    kind = "revertRealtimeMutation",
+                    commandId = commandId,
+                    timeoutMs = timeoutMs,
+                    commandName = "revertRealtimeMutation",
+                    args = mapOf("commandId" to commandId, "mutation" to mutation),
+                )
+            } else {
+                openDeepLink(
+                    sessionHandle,
+                    "thrivify://automation/revertRealtimeMutation?commandId=$commandId&mutation=${urlEncode(payloadJson)}",
+                )
+                awaitBridgeCommandCompletion(commandId, timeoutMs, "revertRealtimeMutation")
+            }
+            buildJsonObject {
+                put("ok", JsonPrimitive(result.ok))
+                put("macro", JsonPrimitive(macro))
+                put("command_id", JsonPrimitive(commandId))
+                result.error?.let { put("error", JsonPrimitive(it)) }
+                put("summary", JsonPrimitive(if (result.ok) "Reverted realtime mutation." else "Failed to revert realtime mutation."))
+            }
+        }
+
+        "send_voice_fixture" -> {
+            val voiceFixture = genericObjectMap("voice_fixture", "voiceFixture", "fixture", "payload")
+            val commandId = args.stringValue("command_id", "commandId")
+                ?: "send-voice-fixture-${System.currentTimeMillis()}"
+            val timeoutMs = args.longValue("timeout_ms", "timeoutMs") ?: 20_000L
+            val payloadJson = daemonMapper.writeValueAsString(voiceFixture)
+            val result = if (!sessionHandle.appId.isNullOrBlank() && DaemonBridgeRegistry.isConnected(sessionHandle.appId)) {
+                sendBridgeCommandWithRecovery(
+                    appId = sessionHandle.appId,
+                    kind = "sendVoiceFixture",
+                    commandId = commandId,
+                    timeoutMs = timeoutMs,
+                    commandName = "sendVoiceFixture",
+                    args = mapOf("commandId" to commandId, "voiceFixture" to voiceFixture),
+                )
+            } else {
+                openDeepLink(
+                    sessionHandle,
+                    "thrivify://automation/sendVoiceFixture?commandId=$commandId&voiceFixture=${urlEncode(payloadJson)}",
+                )
+                awaitBridgeCommandCompletion(commandId, timeoutMs, "sendVoiceFixture")
+            }
+            buildJsonObject {
+                put("ok", JsonPrimitive(result.ok))
+                put("macro", JsonPrimitive(macro))
+                put("command_id", JsonPrimitive(commandId))
+                result.error?.let { put("error", JsonPrimitive(it)) }
+                put("summary", JsonPrimitive(if (result.ok) "Sent voice fixture." else "Failed to send voice fixture."))
+            }
+        }
+
+        "await_marker" -> {
+            val marker = args.stringValue("marker", "marker_id", "markerId")
+                ?: error("run_macro.args.marker is required")
+            val commandId = args.stringValue("command_id", "commandId")
+                ?: "await-marker-${System.currentTimeMillis()}"
+            val timeoutMs = args.longValue("timeout_ms", "timeoutMs") ?: 15_000L
+            val result = if (!sessionHandle.appId.isNullOrBlank() && DaemonBridgeRegistry.isConnected(sessionHandle.appId)) {
+                sendBridgeCommandWithRecovery(
+                    appId = sessionHandle.appId,
+                    kind = "awaitMarker",
+                    commandId = commandId,
+                    timeoutMs = timeoutMs + 1_000L,
+                    commandName = "awaitMarker",
+                    args = mapOf(
+                        "commandId" to commandId,
+                        "marker" to marker,
+                        "timeoutMs" to timeoutMs,
+                    ),
+                )
+            } else {
+                openDeepLink(
+                    sessionHandle,
+                    "thrivify://automation/awaitMarker?commandId=$commandId&marker=${urlEncode(marker)}&timeoutMs=$timeoutMs",
+                )
+                awaitBridgeCommandCompletion(commandId, timeoutMs + 1_000L, "awaitMarker")
+            }
+            buildJsonObject {
+                put("ok", JsonPrimitive(result.ok))
+                put("macro", JsonPrimitive(macro))
+                put("command_id", JsonPrimitive(commandId))
+                put("marker", JsonPrimitive(marker))
+                result.route?.let { put("route", JsonPrimitive(it)) }
+                result.error?.let { put("error", JsonPrimitive(it)) }
+                put("summary", JsonPrimitive(if (result.ok) "Marker became ready." else "Marker did not become ready."))
+            }
+        }
+
         else -> {
             val fallbackFlowPath = args.stringValue("flow_path", "flowPath")
                 ?: error("Unknown macro: $macro")
@@ -897,33 +1462,6 @@ private suspend fun runMacro(
             )
         }
     }
-}
-
-private fun daemonOrchestra(
-    maestro: maestro.Maestro,
-    flowName: String,
-    flowFile: File,
-): Orchestra {
-    fun commandLabel(command: MaestroCommand): String =
-        command.asCommand()?.let { it::class.simpleName } ?: command.toString()
-
-    return Orchestra(
-        maestro = maestro,
-        onFlowStart = { LiveTraceLogger.flowStarted(flowName, flowFile.absolutePath) },
-        onCommandStart = { index, command -> LiveTraceLogger.commandStarted(flowName, commandLabel(command), index) },
-        onCommandComplete = { _, command -> LiveTraceLogger.commandFinished(flowName, commandLabel(command), "COMPLETED") },
-        onCommandWarned = { _, command -> LiveTraceLogger.commandFinished(flowName, commandLabel(command), "WARNED") },
-        onCommandSkipped = { _, command -> LiveTraceLogger.commandFinished(flowName, commandLabel(command), "SKIPPED") },
-        onCommandFailed = { _, command, error ->
-            LiveTraceLogger.commandFinished(
-                flowName,
-                commandLabel(command),
-                "FAILED",
-                detail = error.message ?: error::class.simpleName ?: "unknown error",
-            )
-            throw error
-        },
-    )
 }
 
 private suspend fun awaitDaemonEvent(
@@ -1050,6 +1588,19 @@ private fun semanticStateJson(state: DaemonBridgeRegistry.SemanticState): JsonOb
         buildJsonArray { state.conversationIds.forEach { add(JsonPrimitive(it)) } },
     )
     put(
+        "feature_flags",
+        buildJsonObject {
+            state.featureFlags.forEach { (key, value) ->
+                when (value) {
+                    null -> put(key, JsonPrimitive("null"))
+                    is Boolean -> put(key, JsonPrimitive(value))
+                    is Number -> put(key, JsonPrimitive(value.toDouble()))
+                    else -> put(key, JsonPrimitive(value.toString()))
+                }
+            }
+        },
+    )
+    put(
         "known_overlays",
         buildJsonArray { state.knownOverlays.forEach { add(JsonPrimitive(it)) } },
     )
@@ -1109,17 +1660,41 @@ private suspend fun awaitRouteMarker(sessionHandle: McpSessionRegistry.SessionHa
     }
 }
 
-private fun installDebugOutputs(debugOutputDir: String?, testOutputDir: String?) {
-    val debugDirPath = debugOutputDir?.let { Paths.get(it).toAbsolutePath().normalize() }
-    val testDirPath = testOutputDir?.let { Paths.get(it).toAbsolutePath().normalize() }
-    debugDirPath?.let { Files.createDirectories(it) }
-    testDirPath?.let { Files.createDirectories(it) }
-    TestDebugReporter.updateTestOutputDir(testDirPath)
-    TestDebugReporter.install(
-        debugOutputPathAsString = debugDirPath?.toString(),
-        flattenDebugOutput = true,
-        printToConsole = false,
+private suspend fun <T> withDiagnosticSession(
+    body: JsonObject,
+    block: suspend (McpSessionRegistry.SessionHandle) -> T,
+): T {
+    val existingSessionId = body.stringValue("session_id")
+    if (!existingSessionId.isNullOrBlank()) {
+        val handle = McpSessionRegistry.resumeSession(
+            sessionId = existingSessionId,
+            sessionManager = MaestroSessionManager,
+            ttlMsOverride = body.longValue("ttl_ms", "ttlMs"),
+        ) ?: error("Unknown, expired, or unhealthy session_id: $existingSessionId")
+        return block(handle)
+    }
+
+    val deviceId = body.stringValue("device_id", "deviceId")
+        ?: error("session_id or device_id is required")
+    val owner = body.stringValue("owner")
+    val label = body.stringValue("label") ?: "daemon-project-api:$deviceId"
+    initializeRunMetadata(owner, label)
+    val handle = McpSessionRegistry.openSession(
+        sessionManager = MaestroSessionManager,
+        deviceId = deviceId,
+        appId = body.stringValue("app_id", "appId"),
+        projectRoot = resolveProjectRoot(body),
+        owner = owner,
+        label = label,
+        driverHostPort = body.intValue("driver_host_port", "driverHostPort"),
+        ttlMsOverride = body.longValue("ttl_ms", "ttlMs") ?: 60_000L,
     )
+
+    return try {
+        block(handle)
+    } finally {
+        McpSessionRegistry.closeSession(handle.sessionId, source = "daemon_project_api")
+    }
 }
 
 private fun initializeRunMetadata(owner: String?, label: String?) {
@@ -1131,43 +1706,15 @@ private fun initializeRunMetadata(owner: String?, label: String?) {
 }
 
 private fun resolveProjectRoot(body: JsonObject): String? =
-    body.stringValue("project_root")?.let { resolvePath(null, it).toAbsolutePath().normalize().toString() }
+    body.stringValue("project_root")?.let { ProjectToolSupport.resolvePath(null, it).toAbsolutePath().normalize().toString() }
 
 private fun resolveFlowPath(projectRoot: String?, flowPath: String): Path =
-    resolvePath(projectRoot, flowPath)
+    ProjectToolSupport.resolvePath(projectRoot, flowPath)
 
-private fun resolvePath(projectRoot: String?, rawPath: String): Path {
-    val path = Paths.get(rawPath)
-    return if (path.isAbsolute) {
-        path.normalize()
-    } else if (!projectRoot.isNullOrBlank()) {
-        Paths.get(projectRoot).resolve(path).normalize()
-    } else {
-        WorkingDirectory.baseDir.toPath().resolve(path).normalize()
-    }
-}
-
-private fun projectIndexVersion(projectRoot: String?): String {
-    if (projectRoot.isNullOrBlank()) {
-        return "working-dir:${WorkingDirectory.baseDir.absolutePath}"
-    }
-    return "project:${resolvePath(null, projectRoot).toAbsolutePath().normalize()}"
-}
-
-private suspend fun ApplicationCall.receiveJsonObject(): JsonObject {
-    val raw = receiveText().ifBlank { "{}" }
-    return daemonJson.parseToJsonElement(raw).jsonObject
-}
-
-private suspend fun ApplicationCall.respondJson(
-    payload: JsonObject,
-    status: HttpStatusCode = HttpStatusCode.OK,
-) {
-    respondText(payload.toString(), ContentType.Application.Json, status)
-}
-
-private fun normalizeBatchActionType(raw: String): String =
-    raw.trim().replace("-", "_").lowercase()
+private fun projectIndexVersion(
+    projectRoot: String?,
+    forceRefresh: Boolean = false,
+): String = ProjectToolSupport.projectIndexVersion(projectRoot, forceRefresh)
 
 private fun selectorRegex(value: String, useFuzzyMatching: Boolean): String =
     if (useFuzzyMatching) ".*${Regex.escape(value)}.*" else value
@@ -1278,3 +1825,19 @@ private fun parseKeyCode(value: String): KeyCode? =
 
 private fun urlEncode(value: String): String =
     java.net.URLEncoder.encode(value, Charsets.UTF_8)
+
+private suspend fun ApplicationCall.receiveJsonObject(): JsonObject {
+    val raw = receiveText().ifBlank { "{}" }
+    return daemonJson.parseToJsonElement(raw).jsonObject
+}
+
+private suspend fun ApplicationCall.respondJson(
+    payload: JsonObject,
+    status: HttpStatusCode = HttpStatusCode.OK,
+) {
+    respondText(payload.toString(), ContentType.Application.Json, status)
+}
+
+private fun normalizeBatchActionType(raw: String): String =
+    raw.trim().replace("-", "_").lowercase()
+

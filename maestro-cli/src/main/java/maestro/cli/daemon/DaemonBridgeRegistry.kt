@@ -3,7 +3,9 @@ package maestro.cli.daemon
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import io.ktor.server.websocket.DefaultWebSocketServerSession
+import io.ktor.websocket.CloseReason
 import io.ktor.websocket.Frame
+import io.ktor.websocket.close
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CompletableDeferred
@@ -13,6 +15,7 @@ import kotlinx.coroutines.withTimeout
 object DaemonBridgeRegistry {
 
     private val mapper = jacksonObjectMapper().setSerializationInclusion(JsonInclude.Include.NON_NULL)
+    private const val DEFAULT_SUPPRESSION_MS = 1_500L
 
     data class SemanticState(
         val appId: String? = null,
@@ -76,11 +79,15 @@ object DaemonBridgeRegistry {
     )
 
     private val clients = ConcurrentHashMap<String, BridgeClient>()
+    private val suppressedAppsUntil = ConcurrentHashMap<String, Long>()
 
     fun connectionCount(): Int = clients.size
 
     fun isConnected(appId: String?): Boolean {
         if (appId.isNullOrBlank()) {
+            return false
+        }
+        if (isSuppressed(appId)) {
             return false
         }
         return clients.values.any { client -> client.appId == appId }
@@ -90,10 +97,36 @@ object DaemonBridgeRegistry {
         if (appId.isNullOrBlank()) {
             return null
         }
+        if (isSuppressed(appId)) {
+            return null
+        }
         return clients.values
             .filter { client -> client.appId == appId }
             .maxByOrNull { client -> client.state.updatedAtMs }
             ?.state
+    }
+
+    suspend fun disconnect(appId: String?, suppressMs: Long = DEFAULT_SUPPRESSION_MS): Boolean {
+        if (appId.isNullOrBlank()) {
+            return false
+        }
+        suppressSemantic(appId, suppressMs)
+        val client = clients.values
+            .filter { bridge -> bridge.appId == appId }
+            .maxByOrNull { bridge -> bridge.state.updatedAtMs }
+            ?: return true
+        return try {
+            client.session.close(
+                CloseReason(
+                    CloseReason.Codes.NORMAL,
+                    "Daemon requested bridge disconnect for proof/fallback handling",
+                ),
+            )
+            unregister(client.connectionId)
+            true
+        } catch (_: Throwable) {
+            false
+        }
     }
 
     suspend fun register(session: DefaultWebSocketServerSession): String {
@@ -158,7 +191,15 @@ object DaemonBridgeRegistry {
         kind: String,
         args: Map<String, Any?> = emptyMap(),
         timeoutMs: Long = 15_000L,
+        commandIdOverride: String? = null,
     ): CommandResult {
+        if (isSuppressed(appId)) {
+            return CommandResult(
+                id = "bridge-suppressed",
+                ok = false,
+                error = "Bridge temporarily suppressed for appId=$appId",
+            )
+        }
         val client = clients.values
             .filter { bridge -> bridge.appId == appId }
             .maxByOrNull { bridge -> bridge.state.updatedAtMs }
@@ -168,7 +209,7 @@ object DaemonBridgeRegistry {
                 error = "No bridge connected for appId=$appId",
             )
 
-        val commandId = UUID.randomUUID().toString()
+        val commandId = commandIdOverride?.ifBlank { null } ?: UUID.randomUUID().toString()
         val deferred = CompletableDeferred<CommandResult>()
         client.pendingResults[commandId] = deferred
 
@@ -193,9 +234,40 @@ object DaemonBridgeRegistry {
                 ok = false,
                 error = "Bridge command timed out after ${timeoutMs}ms",
             )
+        } catch (error: Throwable) {
+            CommandResult(
+                id = commandId,
+                ok = false,
+                error = error.message ?: error::class.simpleName ?: "Bridge command failed",
+            )
         } finally {
             client.pendingResults.remove(commandId)
         }
+    }
+
+    fun suppressionUntil(appId: String?): Long? {
+        if (appId.isNullOrBlank()) {
+            return null
+        }
+        return suppressedAppsUntil[appId]?.takeIf { it > System.currentTimeMillis() }
+    }
+
+    private fun suppressSemantic(appId: String, durationMs: Long) {
+        val resolvedDuration = durationMs.coerceAtLeast(0L)
+        if (resolvedDuration == 0L) {
+            suppressedAppsUntil.remove(appId)
+            return
+        }
+        suppressedAppsUntil[appId] = System.currentTimeMillis() + resolvedDuration
+    }
+
+    private fun isSuppressed(appId: String): Boolean {
+        val until = suppressedAppsUntil[appId] ?: return false
+        if (until <= System.currentTimeMillis()) {
+            suppressedAppsUntil.remove(appId, until)
+            return false
+        }
+        return true
     }
 
     private fun updateState(

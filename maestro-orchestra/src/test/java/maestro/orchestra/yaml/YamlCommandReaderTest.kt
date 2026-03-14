@@ -590,7 +590,11 @@ internal class YamlCommandReaderTest {
                 endPoint = Point(x = 300, y = 400),
                 waitToSettleTimeoutMs = 50,
                 duration = 400L
-            )
+            ),
+            InputTextCommand(
+                text = "hello",
+                waitToSettleTimeoutMs = 50,
+            ),
         )
     }
 

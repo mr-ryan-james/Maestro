@@ -464,11 +464,11 @@ class Maestro(
         return driver.waitForAppToSettle(initialHierarchy, appId, waitToSettleTimeoutMs)
     }
 
-    fun inputText(text: String) {
+    fun inputText(text: String, waitToSettleTimeoutMs: Int? = null) {
         LOGGER.info("Inputting text: $text")
 
         driver.inputText(text)
-        waitForAppToSettle()
+        waitForAppToSettle(waitToSettleTimeoutMs = waitToSettleTimeoutMs)
     }
 
     fun openLink(link: String, appId: String?, autoVerify: Boolean, browser: Boolean) {

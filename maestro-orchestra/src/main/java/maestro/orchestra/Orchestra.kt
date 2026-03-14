@@ -1534,13 +1534,21 @@ class Orchestra(
             }
         }
 
-        maestro.inputText(command.text)
+        maestro.inputText(
+            text = command.text,
+            waitToSettleTimeoutMs = command.waitToSettleTimeoutMs,
+        )
 
         return true
     }
 
     private fun inputTextRandomCommand(command: InputRandomCommand): Boolean {
-        inputTextCommand(InputTextCommand(text = command.genRandomString()))
+        inputTextCommand(
+            InputTextCommand(
+                text = command.genRandomString(),
+                waitToSettleTimeoutMs = command.waitToSettleTimeoutMs,
+            )
+        )
 
         return true
     }
@@ -2192,6 +2200,22 @@ class Orchestra(
                 blocker = AutomationSelector(text = "There was a problem loading the project.", useFuzzyMatching = false),
                 actions = listOf(
                     AutomationSelector(text = "Go to home", useFuzzyMatching = false),
+                    AutomationSelector(text = "Reload", useFuzzyMatching = false),
+                ),
+            ),
+            KnownOverlayRule(
+                label = "error-loading-app",
+                blocker = AutomationSelector(text = "Error loading app", useFuzzyMatching = false),
+                actions = listOf(
+                    AutomationSelector(text = "OK", useFuzzyMatching = false),
+                    AutomationSelector(text = "Reload", useFuzzyMatching = false),
+                ),
+            ),
+            KnownOverlayRule(
+                label = "failed-to-connect",
+                blocker = AutomationSelector(text = "Failed to connect to http://", useFuzzyMatching = true),
+                actions = listOf(
+                    AutomationSelector(text = "OK", useFuzzyMatching = false),
                     AutomationSelector(text = "Reload", useFuzzyMatching = false),
                 ),
             ),

@@ -16,6 +16,7 @@ The fast path is:
 - `maestro daemon` is the maximal-performance control plane, but the recent non-daemon fast path remains supported for apps that do not use the semantic bridge
 - hot MCP/device tools reuse an existing session instead of reopening the driver
 - `execute_batch`, `await_event`, `query_elements`, and `snapshot` are first-class
+- `run_compiled_flow` now returns optimization metadata so wrapper and daemon callers can see when the compiled-flow path collapsed zero-wait guards, redundant animation waits, or repeated overlay sweeps
 - `visibleNow` / `notVisibleNow` are intended for zero-wait guard logic
 - `dismissKnownOverlays`, `assertVisibleNow`, and `assertNotVisibleNow` are the preferred hot-path primitives for startup guards
 - live status and live trace files are part of the runtime contract, not optional diagnostics

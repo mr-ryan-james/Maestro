@@ -52,6 +52,19 @@ tail -f <artifact-dir>/maestro-live-status.txt
 tail -f <artifact-dir>/maestro-live-trace.log
 ```
 
+## Proof And Closeout
+
+Use the repo proof harnesses to lock the daemon path, the fast non-daemon compatibility path, and bridge-less compatibility targets before shipping wrapper/runtime changes:
+
+```bash
+pnpm run mobile:maestro:proof:thrivify
+pnpm run mobile:maestro:proof:compat
+pnpm run mobile:maestro:proof:soundlikeus
+pnpm run mobile:maestro:proof:closeout
+```
+
+The checked-in `maestro-proof` GitHub workflow now defaults manual runs to requiring both All Gravy compatibility and SoundLikeUs proof coverage, not just the scheduled runs.
+
 ## Fast Authoring Rules
 
 - use `dismissKnownOverlays` instead of a multi-step overlay sweep

@@ -198,6 +198,11 @@ object TestDebugReporter {
      * loggers use our custom configuration rather than the defaults.
      */
     fun install(debugOutputPathAsString: String? = null, flattenDebugOutput: Boolean = false, printToConsole: Boolean) {
+        if (this.debugOutputPathAsString != debugOutputPathAsString || this.flattenDebugOutput != flattenDebugOutput) {
+            debugOutputPath = null
+            liveTracePath = null
+            liveStatusPath = null
+        }
         this.debugOutputPathAsString = debugOutputPathAsString
         this.flattenDebugOutput = flattenDebugOutput
         val path = getDebugOutputPath()
@@ -224,16 +229,14 @@ object TestDebugReporter {
 
         val debugRootPath =
             if (debugOutputPathAsString != null) debugOutputPathAsString!! else System.getProperty("user.home")
-        val debugOutput =
+        val debugOutputCandidate =
             if (flattenDebugOutput) Paths.get(debugRootPath) else buildDefaultDebugOutputPath(debugRootPath)
+        val debugOutput = ensureWritableDirectory(debugOutputCandidate, "debug output")
 
-        if (!debugOutput.exists()) {
-            Files.createDirectories(debugOutput)
-        }
-
-        val liveTraceRoot = testOutputDir ?: debugOutput
-        if (!liveTraceRoot.exists()) {
-            Files.createDirectories(liveTraceRoot)
+        val liveTraceRoot = if (testOutputDir == null || testOutputDir == debugOutput) {
+            debugOutput
+        } else {
+            ensureWritableDirectory(testOutputDir!!, "live trace output")
         }
         liveTracePath = liveTraceRoot.resolve("maestro-live-trace.log")
         liveStatusPath = liveTraceRoot.resolve("maestro-live-status.txt")
@@ -249,15 +252,42 @@ object TestDebugReporter {
     }
 
     private fun buildDefaultDebugOutputPath(debugRootPath: String): Path {
+        val timestamp = DateTimeFormatter.ofPattern("yyyy-MM-dd_HHmmss_SSS").format(LocalDateTime.now())
+        val runSuffix = MaestroRunMetadata.current("maestro").runId.take(8)
+        val foldername = "${timestamp}_${runSuffix}"
         // If testOutputDir is configured, use it as the base path instead of ~/.maestro/tests
         return if (testOutputDir != null) {
-            val foldername = DateTimeFormatter.ofPattern("yyyy-MM-dd_HHmmss").format(LocalDateTime.now())
             testOutputDir!!.resolve(foldername)
         } else {
             val preamble = arrayOf(".maestro", "tests")
-            val foldername = DateTimeFormatter.ofPattern("yyyy-MM-dd_HHmmss").format(LocalDateTime.now())
             Paths.get(debugRootPath, *preamble, foldername)
         }
+    }
+
+    private fun ensureWritableDirectory(preferredPath: Path, description: String): Path {
+        return try {
+            if (!preferredPath.exists()) {
+                Files.createDirectories(preferredPath)
+            }
+            preferredPath
+        } catch (error: Exception) {
+            val fallbackPath = createFallbackDirectory(preferredPath.fileName?.toString() ?: "maestro")
+            val message = "Falling back to ${fallbackPath.absolutePathString()} because ${preferredPath.absolutePathString()} could not be created for $description: ${error.message}"
+            System.err.println(message)
+            logger.warn(message, error)
+            fallbackPath
+        }
+    }
+
+    private fun createFallbackDirectory(nameHint: String): Path {
+        val base = Paths.get(System.getProperty("java.io.tmpdir"), "maestro-tests")
+        Files.createDirectories(base)
+        val sanitizedPrefix = nameHint
+            .replace(Regex("[^A-Za-z0-9._-]"), "_")
+            .trim('_')
+            .take(40)
+            .ifBlank { "maestro" }
+        return Files.createTempDirectory(base, "${sanitizedPrefix}-")
     }
 }
 

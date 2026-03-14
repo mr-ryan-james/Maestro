@@ -21,3 +21,6 @@ appId: com.example.app
     start: 100, 200
     end: 300, 400
     waitToSettleTimeoutMs: 50
+- inputText:
+    text: hello
+    waitToSettleTimeoutMs: 50

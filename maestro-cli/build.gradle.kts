@@ -250,6 +250,10 @@ tasks.named("classes") {
     dependsOn("createProperties")
 }
 
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
+}
+
 tasks.named<Zip>("distZip") {
     archiveFileName.set("maestro.zip")
 }
