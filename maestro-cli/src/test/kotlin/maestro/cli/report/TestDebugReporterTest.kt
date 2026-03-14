@@ -32,4 +32,16 @@ class TestDebugReporterTest {
         assertThat(TestDebugReporter.getDebugOutputPath().exists()).isTrue() // Verify that the logs from this run still exist
     }
 
+    @Test
+    fun `falls back when default debug output path cannot be created`() {
+        val blockedRoot = tempDir.resolve("blocked-root").createDirectories()
+        Files.writeString(blockedRoot.resolve(".maestro"), "blocked")
+
+        TestDebugReporter.install(blockedRoot.pathString, false, false)
+
+        val debugPath = TestDebugReporter.getDebugOutputPath()
+        val fallbackRoot = Paths.get(System.getProperty("java.io.tmpdir"), "maestro-tests")
+        assertThat(debugPath.startsWith(fallbackRoot)).isTrue()
+        assertThat(debugPath.exists()).isTrue()
+    }
 }

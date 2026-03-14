@@ -357,6 +357,10 @@ object OpenSessionTool {
                     "last_accessed_at_ms" to summary.lastUsedAt,
                     "ttl_ms" to summary.ttlMs,
                     "reused" to summary.reused,
+                    "health_state" to summary.healthState,
+                    "last_health_check_at_ms" to summary.lastHealthCheckAt,
+                    "last_failure_reason" to summary.lastFailureReason,
+                    "repaired_from_session_id" to summary.repairedFromSessionId,
                 ),
             ).toString()
             CallToolResult(content = listOf(TextContent(response)))
@@ -392,6 +396,7 @@ object ResumeSessionTool {
                 )
             val summary = McpSessionRegistry.resumeSession(
                 sessionId = sessionId,
+                sessionManager = MaestroSessionManager,
                 ttlMsOverride = ToolSupport.optionalLong(request, "ttl_ms"),
             ) ?: return@RegisteredTool CallToolResult(
                 listOf(TextContent("Unknown or expired session_id: $sessionId")),
@@ -412,6 +417,10 @@ object ResumeSessionTool {
                     "last_accessed_at_ms" to summary.lastUsedAt,
                     "ttl_ms" to summary.ttlMs,
                     "reused" to summary.reused,
+                    "health_state" to summary.healthState,
+                    "last_health_check_at_ms" to summary.lastHealthCheckAt,
+                    "last_failure_reason" to summary.lastFailureReason,
+                    "repaired_from_session_id" to summary.repairedFromSessionId,
                 ),
             ).toString()
             CallToolResult(content = listOf(TextContent(response)))
@@ -486,6 +495,10 @@ object ListSessionsTool {
                                     "opened_at_ms" to session.createdAt,
                                     "last_accessed_at_ms" to session.lastUsedAt,
                                     "ttl_ms" to session.ttlMs,
+                                    "health_state" to session.healthState,
+                                    "last_health_check_at_ms" to session.lastHealthCheckAt,
+                                    "last_failure_reason" to session.lastFailureReason,
+                                    "repaired_from_session_id" to session.repairedFromSessionId,
                                 ),
                             ),
                         )
@@ -553,6 +566,10 @@ object HardResetSessionTool {
                     "opened_at_ms" to reopened.createdAt,
                     "last_accessed_at_ms" to reopened.lastUsedAt,
                     "ttl_ms" to reopened.ttlMs,
+                    "health_state" to reopened.healthState,
+                    "last_health_check_at_ms" to reopened.lastHealthCheckAt,
+                    "last_failure_reason" to reopened.lastFailureReason,
+                    "repaired_from_session_id" to reopened.repairedFromSessionId,
                 ),
             ).toString()
             CallToolResult(content = listOf(TextContent(response)))

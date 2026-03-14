@@ -118,14 +118,19 @@ private fun printVersion() {
 }
 
 fun main(args: Array<String>) {
+    val protocolMode = args.firstOrNull() in setOf("mcp", "daemon")
     // Disable icon in Mac dock
     // https://stackoverflow.com/a/17544259
     try {
         System.setProperty("apple.awt.UIElement", "true")
-        Analytics.warnAndEnableAnalyticsIfNotDisable()
+        if (!protocolMode) {
+            Analytics.warnAndEnableAnalyticsIfNotDisable()
+        }
 
         Dependencies.install()
-        Updates.fetchUpdatesAsync()
+        if (!protocolMode) {
+            Updates.fetchUpdatesAsync()
+        }
         MaestroRunMetadata.initialize(command = "maestro")
 
         val commandLine = CommandLine(App())
@@ -158,7 +163,7 @@ fun main(args: Array<String>) {
             }
 
         // Track CLI run
-        if (args.isNotEmpty())
+        if (!protocolMode && args.isNotEmpty())
             Analytics.trackEvent(CliCommandRunEvent(command = args[0]))
 
         val generateCompletionCommand = commandLine.subcommands["generate-completion"]
@@ -168,24 +173,28 @@ fun main(args: Array<String>) {
             .execute(*args)
 
         DebugLogStore.finalizeRun()
-        TestAnalysisManager.maybeNotify()
+        if (!protocolMode) {
+            TestAnalysisManager.maybeNotify()
+        }
 
-        val newVersion = Updates.checkForUpdates()
-        if (newVersion != null) {
-            Updates.fetchChangelogAsync()
-            System.err.println()
-            val changelog = Updates.getChangelog()
-            val anchor = newVersion.toString().replace(".", "")
-            System.err.println(
-                listOf(
-                    "A new version of the Maestro CLI is available ($newVersion).\n",
-                    "See what's new:",
-                    "https://github.com/mobile-dev-inc/maestro/blob/main/CHANGELOG.md#$anchor",
-                    ChangeLogUtils.print(changelog),
-                    "Upgrade command:",
-                    "curl -Ls \"https://get.maestro.mobile.dev\" | bash",
-                ).joinToString("\n").box()
-            )
+        if (!protocolMode) {
+            val newVersion = Updates.checkForUpdates()
+            if (newVersion != null) {
+                Updates.fetchChangelogAsync()
+                System.err.println()
+                val changelog = Updates.getChangelog()
+                val anchor = newVersion.toString().replace(".", "")
+                System.err.println(
+                    listOf(
+                        "A new version of the Maestro CLI is available ($newVersion).\n",
+                        "See what's new:",
+                        "https://github.com/mobile-dev-inc/maestro/blob/main/CHANGELOG.md#$anchor",
+                        ChangeLogUtils.print(changelog),
+                        "Upgrade command:",
+                        "curl -Ls \"https://get.maestro.mobile.dev\" | bash",
+                    ).joinToString("\n").box()
+                )
+            }
         }
 
         if (commandLine.isVersionHelpRequested) {

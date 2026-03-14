@@ -551,6 +551,7 @@ data class AssertScreenshotCommand(
 
 data class InputTextCommand(
     val text: String,
+    val waitToSettleTimeoutMs: Int? = null,
     override val label: String? = null,
     override val optional: Boolean = false,
 ) : Command {
@@ -815,6 +816,7 @@ enum class InputRandomType {
 data class InputRandomCommand(
     val inputType: InputRandomType? = InputRandomType.TEXT,
     val length: Int? = 8,
+    val waitToSettleTimeoutMs: Int? = null,
     override val label: String? = null,
     override val optional: Boolean = false,
 ) : Command {

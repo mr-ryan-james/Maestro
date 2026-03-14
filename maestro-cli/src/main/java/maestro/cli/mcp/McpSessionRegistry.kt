@@ -1,6 +1,8 @@
 package maestro.cli.mcp
 
+import maestro.cli.CliError
 import maestro.cli.session.MaestroSessionManager
+import maestro.device.DeviceService
 import maestro.ViewHierarchy
 import org.slf4j.LoggerFactory
 import java.util.concurrent.ConcurrentHashMap
@@ -8,6 +10,12 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 object McpSessionRegistry {
+
+    private enum class SessionHealthState {
+        HEALTHY,
+        RECOVERED,
+        UNHEALTHY,
+    }
 
     data class SessionHandle(
         val sessionId: String,
@@ -22,6 +30,15 @@ object McpSessionRegistry {
         val lastUsedAt: Long,
         val ttlMs: Long,
         val reused: Boolean = false,
+        val healthState: String,
+        val lastHealthCheckAt: Long?,
+        val lastFailureReason: String? = null,
+        val repairedFromSessionId: String? = null,
+    )
+
+    private data class HealthCheckResult(
+        val healthy: Boolean,
+        val reason: String? = null,
     )
 
     private data class Entry(
@@ -37,6 +54,9 @@ object McpSessionRegistry {
         @Volatile var ttlMs: Long,
         @Volatile var cachedHierarchy: ViewHierarchy? = null,
         @Volatile var closing: Boolean = false,
+        @Volatile var healthState: SessionHealthState = SessionHealthState.HEALTHY,
+        @Volatile var lastHealthCheckAt: Long? = null,
+        @Volatile var lastFailureReason: String? = null,
         val lock: Any = Any(),
     )
 
@@ -105,43 +125,55 @@ object McpSessionRegistry {
         ttlMsOverride: Long? = null,
     ): SessionHandle {
         pruneExpiredSessions()
-
-        sessions.entries.firstOrNull { (_, entry) ->
-            entry.deviceId == deviceId
-                && entry.driverHostPort == driverHostPort
-                && entry.appId == appId
-                && entry.projectRoot == projectRoot
-                && entry.owner == owner
-                && entry.label == label
-        }?.let { (sessionId, entry) ->
-            touch(entry, ttlMsOverride)
-            logger.info(
-                "Reusing MCP hot session sessionId={} deviceId={} driverHostPort={}",
-                sessionId,
-                deviceId,
-                driverHostPort ?: "default",
-            )
-            return snapshot(sessionId, entry, reused = true)
-        }
+        val connectedDeviceId = ensureDeviceConnected(deviceId, driverHostPort)
 
         sessions.entries
-            .filter { (_, entry) -> entry.deviceId == deviceId && entry.driverHostPort != driverHostPort }
+            .sortedByDescending { it.value.lastUsedAt }
+            .firstOrNull { (_, entry) ->
+                entry.deviceId == connectedDeviceId &&
+                    entry.driverHostPort == driverHostPort &&
+                    entry.appId == appId &&
+                    entry.projectRoot == projectRoot &&
+                    entry.owner == owner &&
+                    entry.label == label
+            }
+            ?.let { (sessionId, entry) ->
+                val health = probeSessionHealth(entry)
+                if (health.healthy) {
+                    touch(entry, ttlMsOverride)
+                    logger.info(
+                        "Reusing MCP hot session sessionId={} deviceId={} driverHostPort={}",
+                        sessionId,
+                        connectedDeviceId,
+                        driverHostPort ?: "default",
+                    )
+                    return snapshot(sessionId, entry, reused = true)
+                }
+                logger.warn(
+                    "Discarding unhealthy MCP hot session sessionId={} deviceId={} reason={}",
+                    sessionId,
+                    connectedDeviceId,
+                    health.reason ?: "unknown",
+                )
+                closeSession(sessionId, source = "reuse_unhealthy")
+            }
+
+        sessions.entries
+            .filter { (_, entry) -> entry.deviceId == connectedDeviceId && entry.driverHostPort != driverHostPort }
             .map { it.key }
             .forEach { sessionId ->
                 closeSession(sessionId, source = "superseded")
             }
 
-        val managedSession = sessionManager.openSession(
-            host = null,
-            port = null,
+        val managedSession = openManagedSessionWithReconnect(
+            sessionManager = sessionManager,
+            requestedDeviceId = deviceId,
+            connectedDeviceId = connectedDeviceId,
             driverHostPort = driverHostPort,
-            deviceId = deviceId,
-            platform = null,
-            reinstallDriver = false,
         )
         return register(
             managedSession = managedSession,
-            deviceId = deviceId,
+            deviceId = managedSession.deviceId ?: connectedDeviceId,
             appId = appId,
             projectRoot = projectRoot,
             owner = owner,
@@ -151,10 +183,42 @@ object McpSessionRegistry {
         )
     }
 
-    fun resumeSession(sessionId: String, ttlMsOverride: Long? = null): SessionHandle? {
+    fun resumeSession(
+        sessionId: String,
+        sessionManager: MaestroSessionManager? = null,
+        ttlMsOverride: Long? = null,
+    ): SessionHandle? {
         val entry = sessions[sessionId] ?: return null
         if (entry.closing) {
             return null
+        }
+        val health = probeSessionHealth(entry)
+        if (!health.healthy) {
+            logger.warn(
+                "Refusing to resume unhealthy MCP session sessionId={} deviceId={} reason={}",
+                sessionId,
+                entry.deviceId,
+                health.reason ?: "unknown",
+            )
+            if (sessionManager == null) {
+                return null
+            }
+            closeSession(sessionId, source = "resume_unhealthy")
+            val reopened = openSession(
+                sessionManager = sessionManager,
+                deviceId = entry.deviceId,
+                appId = entry.appId,
+                projectRoot = entry.projectRoot,
+                owner = entry.owner,
+                label = entry.label,
+                driverHostPort = entry.driverHostPort,
+                ttlMsOverride = ttlMsOverride ?: entry.ttlMs,
+            )
+            return reopened.copy(
+                reused = true,
+                healthState = SessionHealthState.RECOVERED.name.lowercase(),
+                repairedFromSessionId = sessionId,
+            )
         }
         touch(entry, ttlMsOverride)
         logger.info(
@@ -217,7 +281,14 @@ object McpSessionRegistry {
             if (entry.closing) {
                 error("session_id $sessionId is closing")
             }
-            block(entry.managedSession.session)
+            try {
+                block(entry.managedSession.session)
+            } catch (throwable: Throwable) {
+                if (shouldMarkSessionUnhealthy(throwable)) {
+                    markUnhealthy(entry, throwable.message ?: throwable.javaClass.simpleName)
+                }
+                throw throwable
+            }
         }
     }
 
@@ -259,6 +330,163 @@ object McpSessionRegistry {
         ttlMsOverride?.let { entry.ttlMs = it.coerceAtLeast(1_000L) }
     }
 
+    private fun probeSessionHealth(entry: Entry): HealthCheckResult {
+        if (entry.closing) {
+            return HealthCheckResult(healthy = false, reason = "session_closing")
+        }
+        return synchronized(entry.lock) {
+            if (entry.closing) {
+                return@synchronized HealthCheckResult(healthy = false, reason = "session_closing")
+            }
+            val checkedAt = System.currentTimeMillis()
+            val driver = entry.managedSession.session.maestro.driver
+            if (driver.isShutdown()) {
+                markUnhealthy(
+                    entry = entry,
+                    reason = "driver_channel_closed",
+                    checkedAt = checkedAt,
+                )
+                return@synchronized HealthCheckResult(healthy = false, reason = entry.lastFailureReason)
+            }
+            runCatching {
+                entry.managedSession.session.maestro.deviceInfo()
+            }.fold(
+                onSuccess = {
+                    entry.healthState = if (entry.healthState == SessionHealthState.RECOVERED) {
+                        SessionHealthState.RECOVERED
+                    } else {
+                        SessionHealthState.HEALTHY
+                    }
+                    entry.lastHealthCheckAt = checkedAt
+                    entry.lastFailureReason = null
+                    HealthCheckResult(healthy = true)
+                },
+                onFailure = { throwable ->
+                    markUnhealthy(
+                        entry = entry,
+                        reason = throwable.message ?: throwable.javaClass.simpleName,
+                        checkedAt = checkedAt,
+                    )
+                    HealthCheckResult(healthy = false, reason = entry.lastFailureReason)
+                },
+            )
+        }
+    }
+
+    private fun markUnhealthy(entry: Entry, reason: String, checkedAt: Long = System.currentTimeMillis()) {
+        entry.healthState = SessionHealthState.UNHEALTHY
+        entry.lastHealthCheckAt = checkedAt
+        entry.lastFailureReason = reason
+        entry.cachedHierarchy = null
+    }
+
+    private fun ensureDeviceConnected(deviceId: String, driverHostPort: Int?): String {
+        DeviceService.listConnectedDevices()
+            .firstOrNull { it.instanceId.equals(deviceId, ignoreCase = true) }
+            ?.let { return it.instanceId }
+
+        val launchable = DeviceService.listAvailableForLaunchDevices(includeWeb = true)
+            .firstOrNull { it.modelId.equals(deviceId, ignoreCase = true) }
+            ?: return deviceId
+
+        val started = runCatching {
+            DeviceService.startDevice(launchable, driverHostPort)
+        }.getOrElse { throwable ->
+            if (throwable is CliError) {
+                throw throwable
+            }
+            throw IllegalStateException(
+                "Failed to start requested device $deviceId before opening session: ${throwable.message}",
+                throwable,
+            )
+        }
+
+        logger.info(
+            "Started launchable device before opening MCP session requestedDeviceId={} connectedDeviceId={} driverHostPort={}",
+            deviceId,
+            started.instanceId,
+            driverHostPort ?: "default",
+        )
+        return started.instanceId
+    }
+
+    private fun openManagedSessionWithReconnect(
+        sessionManager: MaestroSessionManager,
+        requestedDeviceId: String,
+        connectedDeviceId: String,
+        driverHostPort: Int?,
+    ): MaestroSessionManager.ManagedSession {
+        var currentDeviceId = connectedDeviceId
+        repeat(2) { attempt ->
+            try {
+                return sessionManager.openSession(
+                    host = null,
+                    port = null,
+                    driverHostPort = driverHostPort,
+                    deviceId = currentDeviceId,
+                    platform = null,
+                    reinstallDriver = false,
+                )
+            } catch (throwable: Throwable) {
+                if (!shouldRetryDeviceOpen(throwable) || attempt == 1) {
+                    throw throwable
+                }
+                logger.warn(
+                    "Retrying MCP session open after device connectivity race requestedDeviceId={} connectedDeviceId={} driverHostPort={} reason={}",
+                    requestedDeviceId,
+                    currentDeviceId,
+                    driverHostPort ?: "default",
+                    throwable.message ?: throwable.javaClass.simpleName,
+                )
+                currentDeviceId = reconnectDevice(requestedDeviceId, driverHostPort)
+            }
+        }
+        error("unreachable")
+    }
+
+    private fun reconnectDevice(deviceId: String, driverHostPort: Int?): String {
+        repeat(3) { attempt ->
+            runCatching { ensureDeviceConnected(deviceId, driverHostPort) }
+                .onSuccess { return it }
+                .onFailure { throwable ->
+                    logger.warn(
+                        "Failed to reconnect requested device attempt={} deviceId={} driverHostPort={} reason={}",
+                        attempt + 1,
+                        deviceId,
+                        driverHostPort ?: "default",
+                        throwable.message ?: throwable.javaClass.simpleName,
+                    )
+                }
+            Thread.sleep(500L)
+        }
+        return ensureDeviceConnected(deviceId, driverHostPort)
+    }
+
+    private fun shouldRetryDeviceOpen(throwable: Throwable): Boolean {
+        return generateSequence(throwable) { it.cause }
+            .any { current ->
+                val message = current.message?.lowercase().orEmpty()
+                current is CliError && message.contains("is not connected")
+            }
+    }
+
+    private fun shouldMarkSessionUnhealthy(throwable: Throwable): Boolean {
+        return generateSequence(throwable) { it.cause }
+            .map { current ->
+                val message = current.message?.lowercase().orEmpty()
+                current.javaClass.name.lowercase() to message
+            }
+            .any { (className, message) ->
+                className.contains("connectexception") ||
+                    className.contains("socketexception") ||
+                    className.contains("xcutestservererror") ||
+                    message.contains("failed to connect") ||
+                    message.contains("connection refused") ||
+                    message.contains("unexpected end of stream") ||
+                    message.contains("stream was reset")
+            }
+    }
+
     private fun pruneExpiredSessions() {
         val now = System.currentTimeMillis()
         sessions.entries
@@ -273,7 +501,12 @@ object McpSessionRegistry {
             }
     }
 
-    private fun snapshot(sessionId: String, entry: Entry, reused: Boolean = false): SessionHandle {
+    private fun snapshot(
+        sessionId: String,
+        entry: Entry,
+        reused: Boolean = false,
+        repairedFromSessionId: String? = null,
+    ): SessionHandle {
         return SessionHandle(
             sessionId = sessionId,
             deviceId = entry.deviceId,
@@ -287,6 +520,10 @@ object McpSessionRegistry {
             lastUsedAt = entry.lastUsedAt,
             ttlMs = entry.ttlMs,
             reused = reused,
+            healthState = entry.healthState.name.lowercase(),
+            lastHealthCheckAt = entry.lastHealthCheckAt,
+            lastFailureReason = entry.lastFailureReason,
+            repairedFromSessionId = repairedFromSessionId,
         )
     }
 }
