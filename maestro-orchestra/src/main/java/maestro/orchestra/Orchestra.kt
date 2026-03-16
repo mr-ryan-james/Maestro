@@ -2093,7 +2093,11 @@ class Orchestra(
     }
 
     private fun pasteText(): Boolean {
-        copiedText?.let { maestro.inputText(it) }
+        logger.info("[pasteText] copiedText=${copiedText?.take(30) ?: "NULL"}")
+        copiedText?.let {
+            logger.info("[pasteText] calling maestro.inputText with ${it.length} chars")
+            maestro.inputText(it)
+        } ?: logger.info("[pasteText] copiedText is null, no text pasted")
         return true
     }
 

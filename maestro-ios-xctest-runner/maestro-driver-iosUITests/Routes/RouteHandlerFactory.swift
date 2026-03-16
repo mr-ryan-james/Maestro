@@ -46,6 +46,8 @@ class RouteHandlerFactory {
              return LaunchAppHandler()
         case .shutdown:
             return ShutdownHandler()
+        case .tapByIdentifier:
+            return TapByIdentifierHandler()
         }
     }
 }

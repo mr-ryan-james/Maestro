@@ -23,6 +23,7 @@ enum Route: String, CaseIterable {
     case launchApp
     case terminateApp
     case shutdown
+    case tapByIdentifier
 
     func toHTTPRoute() -> HTTPRoute {
         return HTTPRoute(rawValue)

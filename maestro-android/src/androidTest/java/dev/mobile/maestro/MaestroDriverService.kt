@@ -6,8 +6,11 @@ import android.content.Context.LOCATION_SERVICE
 import android.location.Criteria
 import android.location.Location
 import android.location.LocationManager
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.os.Build
 import android.os.SystemClock
+import android.view.accessibility.AccessibilityNodeInfo
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.KeyEvent.KEYCODE_1
@@ -316,17 +319,150 @@ class Service(
         responseObserver: StreamObserver<MaestroAndroid.InputTextResponse>
     ) {
         try {
-            Log.d("Maestro", "Inputting text")
-            request.text.forEach {
-                setText(it.toString())
-                Thread.sleep(75)
+            Log.i(TAG, "[inputText] called with ${request.text.length} chars")
+
+            setSystemClipboard(request.text)
+
+            val pasted = pasteFromClipboardIntoFocusedEditable()
+            if (!pasted) {
+                Log.w(TAG, "[inputText] paste path unavailable, falling back to hardware keys")
+                request.text.forEach { ch ->
+                    setText(ch.toString())
+                    SystemClock.sleep(35)
+                }
             }
 
-            responseObserver.onNext(inputTextResponse { })
+            responseObserver.onNext(inputTextResponse {})
             responseObserver.onCompleted()
-        } catch (e: Throwable) {
-            responseObserver.onError(e.internalError())
+        } catch (t: Throwable) {
+            responseObserver.onError(t.internalError())
         }
+    }
+
+    /**
+     * Put text on the real Android system clipboard so ACTION_PASTE can use it.
+     */
+    private fun setSystemClipboard(text: String) {
+        val clipboard = InstrumentationRegistry.getInstrumentation()
+            .context
+            .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+
+        clipboard.setPrimaryClip(ClipData.newPlainText("maestro-input", text))
+        SystemClock.sleep(50)
+    }
+
+    /**
+     * Paste clipboard content into the focused editable field via ACTION_PASTE.
+     * This goes through EditText.onTextContextMenuItem → InputConnection.commitText,
+     * which is the code path React Native's controlled TextInput actually listens to.
+     * Returns false if no suitable target found or paste failed.
+     */
+    private fun pasteFromClipboardIntoFocusedEditable(): Boolean {
+        refreshAccessibilityCache()
+
+        var node: AccessibilityNodeInfo? = findBestEditableTarget()
+        try {
+            if (node == null) {
+                Log.w(TAG, "[inputText] no editable target found")
+                return false
+            }
+
+            // Focus the node if it isn't already focused
+            if (!node.isFocused && supportsAction(node, AccessibilityNodeInfo.ACTION_FOCUS)) {
+                val focused = node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                Log.i(TAG, "[inputText] ACTION_FOCUS result=$focused")
+
+                node.recycle()
+                node = null
+
+                SystemClock.sleep(50)
+                refreshAccessibilityCache()
+                node = findBestEditableTarget()
+                if (node == null) {
+                    Log.w(TAG, "[inputText] target disappeared after ACTION_FOCUS")
+                    return false
+                }
+            }
+
+            if (!supportsAction(node, AccessibilityNodeInfo.ACTION_PASTE)) {
+                Log.w(TAG, "[inputText] target does not expose ACTION_PASTE")
+                return false
+            }
+
+            val pasted = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+            Log.i(TAG, "[inputText] ACTION_PASTE result=$pasted")
+            if (!pasted) {
+                return false
+            }
+
+            uiDevice.waitForIdle()
+            SystemClock.sleep(100)
+            return true
+        } finally {
+            node?.recycle()
+        }
+    }
+
+    /**
+     * Find the best editable target in the active window with cascading fallback:
+     * 1. focused + editable + supports paste
+     * 2. focused + editable
+     * 3. editable + supports paste
+     * 4. any editable
+     */
+    private fun findBestEditableTarget(): AccessibilityNodeInfo? {
+        val root = uiAutomation.rootInActiveWindow ?: return null
+        try {
+            return findNode(root) {
+                it.isEditable &&
+                    it.isFocused &&
+                    supportsAction(it, AccessibilityNodeInfo.ACTION_PASTE)
+            } ?: findNode(root) {
+                it.isEditable && it.isFocused
+            } ?: findNode(root) {
+                it.isEditable &&
+                    supportsAction(it, AccessibilityNodeInfo.ACTION_PASTE)
+            } ?: findNode(root) {
+                it.isEditable
+            }
+        } finally {
+            root.recycle()
+        }
+    }
+
+    /**
+     * Generic accessibility tree walker. Returns the first node matching the predicate,
+     * with proper recycle() on non-matching nodes.
+     */
+    private fun findNode(
+        node: AccessibilityNodeInfo,
+        predicate: (AccessibilityNodeInfo) -> Boolean
+    ): AccessibilityNodeInfo? {
+        if (predicate(node)) {
+            return AccessibilityNodeInfo.obtain(node)
+        }
+
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            try {
+                val result = findNode(child, predicate)
+                if (result != null) {
+                    return result
+                }
+            } finally {
+                child.recycle()
+            }
+        }
+
+        return null
+    }
+
+    /**
+     * Check if an accessibility node supports a given action.
+     */
+    @Suppress("DEPRECATION")
+    private fun supportsAction(node: AccessibilityNodeInfo, action: Int): Boolean {
+        return node.actions and action != 0
     }
 
     override fun screenshot(

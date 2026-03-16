@@ -232,14 +232,9 @@ struct ViewHierarchyHandler: HTTPHandler {
         logger.info("Starting getHierarchyWithFallback for element.")
 
         do {
-            var hierarchy = try elementHierarchy(xcuiElement: element)
-            logger.info("Successfully retrieved element hierarchy.")
-
-            if hierarchy.depth() < snapshotMaxDepth {
-                return hierarchy
-            }
-            logger.info("Hierarchy depth exceeded max depth \(self.snapshotMaxDepth). Returning truncated snapshot.")
-            return truncateHierarchy(hierarchy, remainingDepth: snapshotMaxDepth)
+            let hierarchy = try elementHierarchy(xcuiElement: element)
+            logger.info("Successfully retrieved element hierarchy (depth: \(hierarchy.depth())).")
+            return hierarchy
         } catch let error {
             guard isIllegalArgumentError(error) else {
                 NSLog("Snapshot failure, cannot return view hierarchy due to \(error)")
