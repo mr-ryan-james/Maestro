@@ -216,7 +216,7 @@ class Orchestra(
         }
     }
 
-    private suspend fun executeCommands(
+    suspend fun executeCommands(
         commands: List<MaestroCommand>,
         config: MaestroConfig? = null,
         shouldReinitJsEngine: Boolean = true,

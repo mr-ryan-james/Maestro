@@ -339,7 +339,7 @@ object DeviceService {
         return result
     }
 
-    private fun listIOSDevices(): List<Device> {
+    fun listIOSDevices(): List<Device> {
         val simctlList = runCatching {
             localSimulatorUtils.list()
         }.getOrNull()
@@ -418,7 +418,8 @@ object DeviceService {
                     instanceId = deviceDir.name,
                     description = "$name - CoreSimulator fallback - ${deviceDir.name}",
                     platform = Platform.IOS,
-                    deviceType = Device.DeviceType.SIMULATOR
+                    deviceType = Device.DeviceType.SIMULATOR,
+                    deviceSpec = DeviceSpec.fromRequest(DeviceSpecRequest.Ios())
                 )
             }
             ?: emptyList()
