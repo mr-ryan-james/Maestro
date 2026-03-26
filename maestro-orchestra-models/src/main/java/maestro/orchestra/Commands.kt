@@ -566,6 +566,24 @@ data class InputTextCommand(
     }
 }
 
+data class ReplaceTextCommand(
+    val text: String,
+    val waitToSettleTimeoutMs: Int? = null,
+    override val label: String? = null,
+    override val optional: Boolean = false,
+) : Command {
+
+    override val originalDescription: String
+        get() = "Replace text with $text"
+
+    override fun evaluateScripts(jsEngine: JsEngine): ReplaceTextCommand {
+        return copy(
+            text = text.evaluateScripts(jsEngine),
+            label = label?.evaluateScripts(jsEngine),
+        )
+    }
+}
+
 data class LaunchAppCommand(
     val appId: String,
     val clearState: Boolean? = null,

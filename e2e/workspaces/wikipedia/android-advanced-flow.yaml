@@ -13,7 +13,6 @@ tags:
 - runScript: scripts/getSearchQuery.js
 - inputText: ${output.result}
 - assertVisible: ${output.result}
-- eraseText
-- inputText: "Sun"
+- replaceText: "Sun"
 - assertVisible: "Star at the center of the Solar System"
 - runFlow: subflows/launch-clearstate-android.yaml

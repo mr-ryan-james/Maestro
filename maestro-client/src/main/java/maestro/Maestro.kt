@@ -471,6 +471,13 @@ class Maestro(
         waitForAppToSettle(waitToSettleTimeoutMs = waitToSettleTimeoutMs)
     }
 
+    fun replaceText(text: String, waitToSettleTimeoutMs: Int? = null) {
+        LOGGER.info("Replacing text: $text")
+
+        driver.replaceText(text)
+        waitForAppToSettle(waitToSettleTimeoutMs = waitToSettleTimeoutMs)
+    }
+
     fun openLink(link: String, appId: String?, autoVerify: Boolean, browser: Boolean) {
         LOGGER.info("Opening link $link for app: $appId with autoVerify config as $autoVerify")
 

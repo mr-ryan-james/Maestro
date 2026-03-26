@@ -14,6 +14,8 @@ service MaestroDriver {
 
   rpc inputText(InputTextRequest) returns (InputTextResponse) {}
 
+  rpc replaceText(ReplaceTextRequest) returns (ReplaceTextResponse) {}
+
   rpc eraseAllText(EraseAllTextRequest) returns (EraseAllTextResponse) {}
 
   rpc setLocation(SetLocationRequest) returns (SetLocationResponse) {}
@@ -81,6 +83,10 @@ message InputTextRequest {
 }
 message InputTextResponse {}
 
+message ReplaceTextRequest {
+  string text = 1;
+}
+message ReplaceTextResponse {}
 
 message EraseAllTextRequest {
     uint32 charactersToErase = 1;

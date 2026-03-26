@@ -67,6 +67,7 @@ import maestro_android.emptyResponse
 import maestro_android.eraseAllTextResponse
 import maestro_android.inputTextResponse
 import maestro_android.launchAppResponse
+import maestro_android.replaceTextResponse
 import maestro_android.screenshotResponse
 import maestro_android.setLocationResponse
 import maestro_android.tapResponse
@@ -317,6 +318,94 @@ class Service(
         }
     }
 
+    override fun replaceText(
+        request: MaestroAndroid.ReplaceTextRequest,
+        responseObserver: StreamObserver<MaestroAndroid.ReplaceTextResponse>
+    ) {
+        try {
+            val finalText = replaceTextInFocusedEditable(request.text)
+            Log.i(
+                TAG,
+                "[replaceText] completed requestedLength=${request.text.length} finalLength=${finalText.length}"
+            )
+
+            responseObserver.onNext(replaceTextResponse { })
+            responseObserver.onCompleted()
+        } catch (t: Throwable) {
+            responseObserver.onError(t.internalError())
+        }
+    }
+
+    private fun replaceTextInFocusedEditable(replacementText: String): String {
+        val startedAtMs = SystemClock.elapsedRealtime()
+        refreshAccessibilityCache()
+
+        var node: AccessibilityNodeInfo? = null
+        try {
+            node = focusEditableTarget("[replaceText]")
+
+            val startingText = node.safeTextValue()
+            Log.i(
+                TAG,
+                "[replaceText] start requestedLength=${replacementText.length} startingLength=${startingText.length}"
+            )
+
+            if (matchesReplacementText(replacementText, startingText)) {
+                Log.i(
+                    TAG,
+                    "[replaceText] already matched matchMode=${replacementMatchMode(replacementText, startingText)} durationMs=${SystemClock.elapsedRealtime() - startedAtMs}"
+                )
+                return startingText
+            }
+
+            val strategy = when {
+                trySelectAllAndPasteText(node, replacementText, startingText.length) -> "selectAll+paste"
+                trySetTextValue(node, replacementText) -> "setText"
+                else -> null
+            }
+
+            if (strategy != null) {
+                val finalText = readFocusedEditableText("[replaceText]")
+                Log.i(
+                    TAG,
+                    "[replaceText] strategy=$strategy matchMode=${replacementMatchMode(replacementText, finalText)} durationMs=${SystemClock.elapsedRealtime() - startedAtMs}"
+                )
+                return finalText
+            }
+
+            val clearedCharacters = eraseTextFromFocusedEditable(Int.MAX_VALUE)
+            Log.i(TAG, "[replaceText] fallback clearThenInput clearedCharacters=$clearedCharacters")
+
+            setSystemClipboard(replacementText)
+
+            val pasted = pasteFromClipboardIntoFocusedEditable()
+            if (!pasted) {
+                Log.w(TAG, "[replaceText] paste path unavailable after clear, falling back to hardware keys")
+                replacementText.forEach { ch ->
+                    setText(ch.toString())
+                    SystemClock.sleep(35)
+                }
+            }
+
+            val finalText = readFocusedEditableText("[replaceText]")
+            val matchMode = replacementMatchMode(replacementText, finalText)
+            Log.i(
+                TAG,
+                "[replaceText] strategy=clearThenInput matchMode=$matchMode durationMs=${SystemClock.elapsedRealtime() - startedAtMs}"
+            )
+
+            if (matchMode == "mismatch") {
+                throw IllegalStateException(
+                    "[replaceText] replacement mismatch requested=\"$replacementText\" actual=\"$finalText\""
+                )
+            }
+
+            return finalText
+        } finally {
+            node?.recycle()
+        }
+    }
+
     private fun eraseTextFromFocusedEditable(requestedCharactersToErase: Int): Int {
         val startedAtMs = SystemClock.elapsedRealtime()
 
@@ -539,6 +628,69 @@ class Service(
         return finalLength == 0
     }
 
+    private fun trySelectAllAndPasteText(
+        node: AccessibilityNodeInfo,
+        replacementText: String,
+        startingTextLength: Int
+    ): Boolean {
+        if (!supportsAction(node, AccessibilityNodeInfo.ACTION_PASTE)) {
+            return false
+        }
+
+        return withTemporaryClipboardText(replacementText) {
+            if (startingTextLength > 0 && !selectAllText(node, startingTextLength)) {
+                return@withTemporaryClipboardText false
+            }
+
+            SystemClock.sleep(35)
+            val pasted = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+            Log.i(TAG, "[replaceText] ACTION_PASTE result=$pasted")
+            if (!pasted) {
+                return@withTemporaryClipboardText false
+            }
+
+            val finalText = waitForEditableText(
+                node = node,
+                timeoutMs = 500,
+                operation = "selectAll+paste"
+            ) { matchesReplacementText(replacementText, it) }
+            Log.i(
+                TAG,
+                "[replaceText] selectAll+paste finalLength=${finalText.length} matchMode=${replacementMatchMode(replacementText, finalText)}"
+            )
+            matchesReplacementText(replacementText, finalText)
+        }
+    }
+
+    private fun trySetTextValue(node: AccessibilityNodeInfo, replacementText: String): Boolean {
+        if (!supportsAction(node, AccessibilityNodeInfo.ACTION_SET_TEXT)) {
+            return false
+        }
+
+        val args = Bundle().apply {
+            putCharSequence(
+                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                replacementText
+            )
+        }
+        val replaced = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        Log.i(TAG, "[replaceText] ACTION_SET_TEXT result=$replaced")
+        if (!replaced) {
+            return false
+        }
+
+        val finalText = waitForEditableText(
+            node = node,
+            timeoutMs = 500,
+            operation = "setTextValue"
+        ) { matchesReplacementText(replacementText, it) }
+        Log.i(
+            TAG,
+            "[replaceText] setTextValue finalLength=${finalText.length} matchMode=${replacementMatchMode(replacementText, finalText)}"
+        )
+        return matchesReplacementText(replacementText, finalText)
+    }
+
     private fun selectAllText(node: AccessibilityNodeInfo, textLength: Int): Boolean {
         if (!supportsAction(node, AccessibilityNodeInfo.ACTION_SET_SELECTION)) {
             return false
@@ -569,6 +721,24 @@ class Service(
 
         refreshAccessibilityCache()
         return findBestEditableTarget().useAndRecycle { it.safeTextLength() }
+    }
+
+    private fun refreshEditableTextValue(node: AccessibilityNodeInfo): String {
+        if (node.refresh()) {
+            return node.safeTextValue()
+        }
+
+        refreshAccessibilityCache()
+        return findBestEditableTarget().useAndRecycle { it.safeTextValue() }
+    }
+
+    private fun readFocusedEditableText(logPrefix: String): String {
+        refreshAccessibilityCache()
+        return findBestEditableTarget().useAndRecycle {
+            val text = it.safeTextValue()
+            Log.i(TAG, "$logPrefix focusedEditableLength=${text.length}")
+            text
+        }
     }
 
     private fun pressDeleteFast(): Boolean {
@@ -604,6 +774,27 @@ class Service(
             "[editableWait] operation=$operation finalLength=$currentLength timeoutMs=$timeoutMs"
         )
         return currentLength
+    }
+
+    private fun waitForEditableText(
+        node: AccessibilityNodeInfo,
+        timeoutMs: Long,
+        operation: String,
+        predicate: (String) -> Boolean
+    ): String {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        var currentText = refreshEditableTextValue(node)
+
+        while (!predicate(currentText) && SystemClock.uptimeMillis() < deadline) {
+            SystemClock.sleep(25)
+            currentText = refreshEditableTextValue(node)
+        }
+
+        Log.i(
+            TAG,
+            "[editableWait] operation=$operation finalTextLength=${currentText.length} timeoutMs=$timeoutMs"
+        )
+        return currentText
     }
 
     override fun inputText(
@@ -727,6 +918,24 @@ class Service(
         }
     }
 
+    private fun focusEditableTarget(logPrefix: String): AccessibilityNodeInfo {
+        var node = findBestEditableTarget()
+            ?: throw IllegalStateException("$logPrefix no editable target found")
+
+        if (!node.isFocused && supportsAction(node, AccessibilityNodeInfo.ACTION_FOCUS)) {
+            val focused = node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            Log.i(TAG, "$logPrefix ACTION_FOCUS result=$focused")
+
+            node.recycle()
+            SystemClock.sleep(50)
+            refreshAccessibilityCache()
+            node = findBestEditableTarget()
+                ?: throw IllegalStateException("$logPrefix editable target disappeared after focus")
+        }
+
+        return node
+    }
+
     /**
      * Find the best editable target in the active window with cascading fallback:
      * 1. focused + editable + supports paste
@@ -794,6 +1003,32 @@ class Service(
             return 0
         }
         return text?.toString()?.length ?: 0
+    }
+
+    private fun AccessibilityNodeInfo.safeTextValue(): String {
+        if (isShowingHintText) {
+            return ""
+        }
+        return text?.toString() ?: ""
+    }
+
+    private fun matchesReplacementText(expectedText: String, actualText: String): Boolean {
+        if (actualText == expectedText) {
+            return true
+        }
+
+        val digitsOnlyExpected = expectedText.isNotEmpty() && expectedText.all(Char::isDigit)
+        return digitsOnlyExpected && actualText.filter(Char::isDigit) == expectedText
+    }
+
+    private fun replacementMatchMode(expectedText: String, actualText: String): String {
+        return when {
+            actualText == expectedText -> "exact"
+            expectedText.isNotEmpty() &&
+                expectedText.all(Char::isDigit) &&
+                actualText.filter(Char::isDigit) == expectedText -> "digit_normalized"
+            else -> "mismatch"
+        }
     }
 
     private inline fun <T> AccessibilityNodeInfo?.useAndRecycle(block: (AccessibilityNodeInfo) -> T): T {

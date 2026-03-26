@@ -359,6 +359,7 @@ class Orchestra(
             is AssertWithAICommand -> assertWithAICommand(command, maestroCommand)
             is ExtractTextWithAICommand -> extractTextWithAICommand(command, maestroCommand)
             is InputTextCommand -> inputTextCommand(command)
+            is ReplaceTextCommand -> replaceTextCommand(command)
             is InputRandomCommand -> inputTextRandomCommand(command)
             is LaunchAppCommand -> launchAppCommand(command)
             is SetPermissionsCommand -> setPermissionsCommand(command)
@@ -1525,14 +1526,7 @@ class Orchestra(
     }
 
     private fun inputTextCommand(command: InputTextCommand): Boolean {
-        if (!maestro.isUnicodeInputSupported()) {
-            val isAscii = Charsets.US_ASCII.newEncoder()
-                .canEncode(command.text)
-
-            if (!isAscii) {
-                throw UnicodeNotSupportedError(command.text)
-            }
-        }
+        ensureTextCommandSupported(command.text)
 
         maestro.inputText(
             text = command.text,
@@ -1540,6 +1534,28 @@ class Orchestra(
         )
 
         return true
+    }
+
+    private fun replaceTextCommand(command: ReplaceTextCommand): Boolean {
+        ensureTextCommandSupported(command.text)
+
+        maestro.replaceText(
+            text = command.text,
+            waitToSettleTimeoutMs = command.waitToSettleTimeoutMs,
+        )
+
+        return true
+    }
+
+    private fun ensureTextCommandSupported(text: String) {
+        if (!maestro.isUnicodeInputSupported()) {
+            val isAscii = Charsets.US_ASCII.newEncoder()
+                .canEncode(text)
+
+            if (!isAscii) {
+                throw UnicodeNotSupportedError(text)
+            }
+        }
     }
 
     private fun inputTextRandomCommand(command: InputRandomCommand): Boolean {

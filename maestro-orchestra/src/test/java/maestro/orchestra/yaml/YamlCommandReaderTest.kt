@@ -36,6 +36,7 @@ import maestro.orchestra.MaestroOnFlowStart
 import maestro.orchestra.OpenLinkCommand
 import maestro.orchestra.PasteTextCommand
 import maestro.orchestra.PressKeyCommand
+import maestro.orchestra.ReplaceTextCommand
 import maestro.orchestra.RepeatCommand
 import maestro.orchestra.RunFlowCommand
 import maestro.orchestra.RunScriptCommand
@@ -594,6 +595,25 @@ internal class YamlCommandReaderTest {
             InputTextCommand(
                 text = "hello",
                 waitToSettleTimeoutMs = 50,
+            ),
+        )
+    }
+
+    @Test
+    fun replaceText(
+        @YamlFile("031_replaceText.yaml") commands: List<Command>
+    ) {
+        assertThat(commands).containsExactly(
+            ApplyConfigurationCommand(MaestroConfig(
+                appId = "com.example.app"
+            )),
+            ReplaceTextCommand(
+                text = "6505550100",
+            ),
+            ReplaceTextCommand(
+                text = "hello",
+                waitToSettleTimeoutMs = 50,
+                label = "Replace the current value"
             ),
         )
     }

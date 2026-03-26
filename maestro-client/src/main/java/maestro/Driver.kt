@@ -23,6 +23,8 @@ import maestro.device.DeviceOrientation
 import okio.Sink
 import java.io.File
 
+private const val DEFAULT_REPLACE_TEXT_ERASE_CHARACTERS = 50
+
 interface Driver {
 
     fun name(): String
@@ -67,6 +69,11 @@ interface Driver {
     fun backPress()
 
     fun inputText(text: String)
+
+    fun replaceText(text: String) {
+        eraseText(DEFAULT_REPLACE_TEXT_ERASE_CHARACTERS)
+        inputText(text)
+    }
 
     fun openLink(link: String, appId: String?, autoVerify: Boolean, browser: Boolean)
 

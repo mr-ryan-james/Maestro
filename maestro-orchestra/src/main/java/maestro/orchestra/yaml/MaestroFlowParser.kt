@@ -90,6 +90,10 @@ private val stringCommands = mapOf<String, (JsonLocation) -> YamlFluentCommand>(
         _location = location,
         eraseText = YamlEraseText(charactersToErase = null)
     )},
+    "replaceText" to { location -> YamlFluentCommand(
+        _location = location,
+        replaceText = YamlReplaceText(text = "")
+    )},
     "inputRandomText" to { location -> YamlFluentCommand(
         _location = location,
         inputRandomText = YamlInputRandomText(length = 8),

@@ -585,6 +585,16 @@ class AndroidDriver(
         }
     }
 
+    override fun replaceText(text: String) {
+        metrics.measured("operation", mapOf("command" to "replaceText")) {
+            runDeviceCall("replaceText") {
+                blockingStubWithTimeout.replaceText(replaceTextRequest {
+                    this.text = text
+                }) ?: throw IllegalStateException("ReplaceText response can't be null")
+            }
+        }
+    }
+
     override fun openLink(link: String, appId: String?, autoVerify: Boolean, browser: Boolean) {
         metrics.measured("operation", mapOf("command" to "openLink", "appId" to appId, "autoVerify" to autoVerify.toString(), "browser" to browser.toString())) {
             if (browser) {

@@ -54,6 +54,7 @@ import maestro.orchestra.MaestroConfig
 import maestro.orchestra.OpenLinkCommand
 import maestro.orchestra.PasteTextCommand
 import maestro.orchestra.PressKeyCommand
+import maestro.orchestra.ReplaceTextCommand
 import maestro.orchestra.RepeatCommand
 import maestro.orchestra.RetryCommand
 import maestro.orchestra.RunFlowCommand
@@ -112,6 +113,7 @@ data class YamlFluentCommand(
     val dismissKnownOverlays: YamlDismissKnownOverlays? = null,
     val tapFirstVisibleNow: YamlTapFirstVisibleNow? = null,
     val inputText: YamlInputText? = null,
+    val replaceText: YamlReplaceText? = null,
     val inputRandomText: YamlInputRandomText? = null,
     val inputRandomNumber: YamlInputRandomNumber? = null,
     val inputRandomEmail: YamlInputRandomEmail? = null,
@@ -291,6 +293,16 @@ data class YamlFluentCommand(
                         waitToSettleTimeoutMs = inputText.waitToSettleTimeoutMs,
                         label = inputText.label,
                         optional = inputText.optional,
+                    )
+                )
+            )
+            replaceText != null -> listOf(
+                MaestroCommand(
+                    ReplaceTextCommand(
+                        text = replaceText.text,
+                        waitToSettleTimeoutMs = replaceText.waitToSettleTimeoutMs,
+                        label = replaceText.label,
+                        optional = replaceText.optional,
                     )
                 )
             )

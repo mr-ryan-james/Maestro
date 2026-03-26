@@ -1,0 +1,7 @@
+appId: com.example.app
+---
+- replaceText: "6505550100"
+- replaceText:
+    text: "hello"
+    waitToSettleTimeoutMs: 50
+    label: "Replace the current value"

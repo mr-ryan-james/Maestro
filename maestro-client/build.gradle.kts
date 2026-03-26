@@ -37,11 +37,13 @@ tasks.named("compileKotlin") {
 
 tasks.named("processResources") {
     dependsOn(":maestro-android:copyMaestroAndroid")
+    dependsOn(":maestro-android:copyMaestroServer")
 }
 
 tasks.whenTaskAdded {
     if (name == "sourcesJar" && this is Jar) {
         dependsOn(":maestro-android:copyMaestroAndroid")
+        dependsOn(":maestro-android:copyMaestroServer")
         duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     }
 }
