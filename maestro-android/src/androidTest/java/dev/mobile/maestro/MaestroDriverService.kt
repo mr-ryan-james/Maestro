@@ -9,7 +9,9 @@ import android.location.LocationManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.os.Build
+import android.os.Bundle
 import android.os.SystemClock
+import android.view.KeyEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.util.DisplayMetrics
 import android.util.Log
@@ -300,18 +302,308 @@ class Service(
         responseObserver: StreamObserver<MaestroAndroid.EraseAllTextResponse>
     ) {
         try {
-            val charactersToErase = request.charactersToErase
-            Log.d("Maestro", "Erasing text $charactersToErase")
+            val requestedCharactersToErase = request.charactersToErase
+            val erasedCharacters = eraseTextFromFocusedEditable(requestedCharactersToErase)
 
-            for (i in 1..charactersToErase) {
-                uiDevice.pressDelete()
-            }
+            Log.i(
+                TAG,
+                "[eraseText] completed requested=$requestedCharactersToErase erased=$erasedCharacters"
+            )
 
             responseObserver.onNext(eraseAllTextResponse { })
             responseObserver.onCompleted()
         } catch (t: Throwable) {
             responseObserver.onError(t.internalError())
         }
+    }
+
+    private fun eraseTextFromFocusedEditable(requestedCharactersToErase: Int): Int {
+        val startedAtMs = SystemClock.elapsedRealtime()
+
+        if (requestedCharactersToErase <= 0) {
+            Log.i(TAG, "[eraseText] skipping non-positive request=$requestedCharactersToErase")
+            return 0
+        }
+
+        var node: AccessibilityNodeInfo? = null
+        try {
+            node = findBestEditableTarget()
+            if (node == null) {
+                throw IllegalStateException("[eraseText] no editable target found")
+            }
+
+            if (!node.isFocused && supportsAction(node, AccessibilityNodeInfo.ACTION_FOCUS)) {
+                val focused = node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                Log.i(TAG, "[eraseText] ACTION_FOCUS result=$focused")
+                node.recycle()
+                node = null
+                SystemClock.sleep(50)
+                refreshAccessibilityCache()
+                node = findBestEditableTarget()
+            }
+
+            if (node == null) {
+                throw IllegalStateException("[eraseText] editable target disappeared after focus")
+            }
+
+            val startingTextLength = node.safeTextLength()
+            val targetDeleteCount = requestedCharactersToErase.coerceAtMost(startingTextLength)
+
+            Log.i(
+                TAG,
+                "[eraseText] start requested=$requestedCharactersToErase startingLength=$startingTextLength targetDeletes=$targetDeleteCount"
+            )
+
+            if (startingTextLength == 0 || targetDeleteCount == 0) {
+                Log.i(
+                    TAG,
+                    "[eraseText] field already empty; nothing to delete durationMs=${SystemClock.elapsedRealtime() - startedAtMs}"
+                )
+                return 0
+            }
+
+            if (targetDeleteCount == startingTextLength) {
+                attemptFastFullClear(node, startingTextLength)?.let { return it }
+            }
+
+            var actualDeletes = 0
+            var currentLength = startingTextLength
+            var exitReason = "requested_limit_reached"
+
+            while (actualDeletes < targetDeleteCount && currentLength > 0) {
+                val pressedDelete = pressDeleteFast()
+                actualDeletes += 1
+                SystemClock.sleep(10)
+
+                val refreshedLength = refreshEditableTextLength(node)
+                Log.i(
+                    TAG,
+                    "[eraseText] deleteIndex=$actualDeletes pressed=$pressedDelete lengthBefore=$currentLength lengthAfter=$refreshedLength"
+                )
+
+                currentLength = refreshedLength
+                if (currentLength == 0) {
+                    exitReason = "field_empty"
+                    break
+                }
+            }
+
+            if (actualDeletes == targetDeleteCount && currentLength > 0) {
+                exitReason = "requested_limit_reached"
+            }
+
+            Log.i(
+                TAG,
+                "[eraseText] exitReason=$exitReason startingLength=$startingTextLength finalLength=$currentLength actualDeletes=$actualDeletes durationMs=${SystemClock.elapsedRealtime() - startedAtMs}"
+            )
+
+            if (targetDeleteCount >= startingTextLength && currentLength > 0) {
+                throw IllegalStateException(
+                    "[eraseText] field not empty after full-clear request: requested=$requestedCharactersToErase startingLength=$startingTextLength finalLength=$currentLength actualDeletes=$actualDeletes"
+                )
+            }
+
+            return actualDeletes
+        } finally {
+            node?.recycle()
+        }
+    }
+
+    private fun attemptFastFullClear(
+        node: AccessibilityNodeInfo,
+        startingTextLength: Int
+    ): Int? {
+        if (trySelectAllAndPasteEmpty(node, startingTextLength)) {
+            return startingTextLength
+        }
+
+        if (trySelectAllAndDelete(node, startingTextLength)) {
+            return startingTextLength
+        }
+
+        if (trySelectAllAndCut(node, startingTextLength)) {
+            return startingTextLength
+        }
+
+        if (trySetTextEmpty(node)) {
+            return startingTextLength
+        }
+
+        return null
+    }
+
+    private fun trySelectAllAndDelete(
+        node: AccessibilityNodeInfo,
+        startingTextLength: Int
+    ): Boolean {
+        if (!selectAllText(node, startingTextLength)) {
+            return false
+        }
+
+        SystemClock.sleep(35)
+        val pressedDelete = pressDeleteFast()
+        val finalLength = waitForEditableTextLength(
+            node = node,
+            timeoutMs = 350,
+            operation = "selectAll+delete"
+        ) { it == 0 }
+        Log.i(TAG, "[eraseText] selectAll+delete pressed=$pressedDelete finalLength=$finalLength")
+        return finalLength == 0
+    }
+
+    private fun trySelectAllAndPasteEmpty(
+        node: AccessibilityNodeInfo,
+        startingTextLength: Int
+    ): Boolean {
+        if (!supportsAction(node, AccessibilityNodeInfo.ACTION_PASTE)) {
+            return false
+        }
+
+        if (!withTemporaryClipboardText("") {
+                if (!selectAllText(node, startingTextLength)) {
+                    return@withTemporaryClipboardText false
+                }
+
+                SystemClock.sleep(35)
+                val pasted = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+                Log.i(TAG, "[eraseText] ACTION_PASTE(emptyClipboard) result=$pasted")
+                if (!pasted) {
+                    return@withTemporaryClipboardText false
+                }
+
+                waitForEditableTextLength(
+                    node = node,
+                    timeoutMs = 350,
+                    operation = "selectAll+pasteEmpty"
+                ) { it == 0 } == 0
+            }
+        ) {
+            return false
+        }
+
+        Log.i(TAG, "[eraseText] selectAll+pasteEmpty finalLength=0")
+        return true
+    }
+
+    private fun trySelectAllAndCut(
+        node: AccessibilityNodeInfo,
+        startingTextLength: Int
+    ): Boolean {
+        if (!supportsAction(node, AccessibilityNodeInfo.ACTION_CUT)) {
+            return false
+        }
+
+        if (!selectAllText(node, startingTextLength)) {
+            return false
+        }
+
+        SystemClock.sleep(50)
+        val cut = node.performAction(AccessibilityNodeInfo.ACTION_CUT)
+        Log.i(TAG, "[eraseText] ACTION_CUT result=$cut")
+        if (!cut) {
+            return false
+        }
+
+        val finalLength = waitForEditableTextLength(
+            node = node,
+            timeoutMs = 350,
+            operation = "selectAll+cut"
+        ) { it == 0 }
+        Log.i(TAG, "[eraseText] selectAll+cut finalLength=$finalLength")
+        return finalLength == 0
+    }
+
+    private fun trySetTextEmpty(node: AccessibilityNodeInfo): Boolean {
+        if (!supportsAction(node, AccessibilityNodeInfo.ACTION_SET_TEXT)) {
+            return false
+        }
+
+        val args = Bundle().apply {
+            putCharSequence(
+                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                ""
+            )
+        }
+        val cleared = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        Log.i(TAG, "[eraseText] ACTION_SET_TEXT(empty) result=$cleared")
+        if (!cleared) {
+            return false
+        }
+
+        val finalLength = waitForEditableTextLength(
+            node = node,
+            timeoutMs = 350,
+            operation = "setTextEmpty"
+        ) { it == 0 }
+        Log.i(TAG, "[eraseText] setTextEmpty finalLength=$finalLength")
+        return finalLength == 0
+    }
+
+    private fun selectAllText(node: AccessibilityNodeInfo, textLength: Int): Boolean {
+        if (!supportsAction(node, AccessibilityNodeInfo.ACTION_SET_SELECTION)) {
+            return false
+        }
+
+        val selectAllArgs = Bundle().apply {
+            putInt(
+                AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT,
+                0
+            )
+            putInt(
+                AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT,
+                textLength
+            )
+        }
+        val selected = node.performAction(
+            AccessibilityNodeInfo.ACTION_SET_SELECTION,
+            selectAllArgs
+        )
+        Log.i(TAG, "[eraseText] ACTION_SET_SELECTION(all) result=$selected")
+        return selected
+    }
+
+    private fun refreshEditableTextLength(node: AccessibilityNodeInfo): Int {
+        if (node.refresh()) {
+            return node.safeTextLength()
+        }
+
+        refreshAccessibilityCache()
+        return findBestEditableTarget().useAndRecycle { it.safeTextLength() }
+    }
+
+    private fun pressDeleteFast(): Boolean {
+        return try {
+            InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_DEL)
+            true
+        } catch (t: Throwable) {
+            Log.w(
+                TAG,
+                "[eraseText] sendKeyDownUpSync(KEYCODE_DEL) failed; falling back to UiDevice.pressDelete()",
+                t
+            )
+            uiDevice.pressDelete()
+        }
+    }
+
+    private fun waitForEditableTextLength(
+        node: AccessibilityNodeInfo,
+        timeoutMs: Long,
+        operation: String,
+        predicate: (Int) -> Boolean
+    ): Int {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        var currentLength = refreshEditableTextLength(node)
+
+        while (!predicate(currentLength) && SystemClock.uptimeMillis() < deadline) {
+            SystemClock.sleep(25)
+            currentLength = refreshEditableTextLength(node)
+        }
+
+        Log.i(
+            TAG,
+            "[editableWait] operation=$operation finalLength=$currentLength timeoutMs=$timeoutMs"
+        )
+        return currentLength
     }
 
     override fun inputText(
@@ -343,12 +635,39 @@ class Service(
      * Put text on the real Android system clipboard so ACTION_PASTE can use it.
      */
     private fun setSystemClipboard(text: String) {
-        val clipboard = InstrumentationRegistry.getInstrumentation()
-            .context
-            .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clipboard = getClipboardManager()
+        clipboard.setPrimaryClip(ClipData.newPlainText("maestro-input", text))
+        SystemClock.sleep(50)
+    }
+
+    private fun withTemporaryClipboardText(
+        text: String,
+        block: () -> Boolean
+    ): Boolean {
+        val clipboard = getClipboardManager()
+        val previousClip = clipboard.primaryClip
 
         clipboard.setPrimaryClip(ClipData.newPlainText("maestro-input", text))
         SystemClock.sleep(50)
+
+        return try {
+            block()
+        } finally {
+            if (previousClip != null) {
+                clipboard.setPrimaryClip(previousClip)
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                clipboard.clearPrimaryClip()
+            } else {
+                clipboard.setPrimaryClip(ClipData.newPlainText("", ""))
+            }
+            SystemClock.sleep(25)
+        }
+    }
+
+    private fun getClipboardManager(): ClipboardManager {
+        return InstrumentationRegistry.getInstrumentation()
+            .context
+            .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     }
 
     /**
@@ -389,14 +708,19 @@ class Service(
                 return false
             }
 
+            val startingTextLength = node.safeTextLength()
             val pasted = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
             Log.i(TAG, "[inputText] ACTION_PASTE result=$pasted")
             if (!pasted) {
                 return false
             }
 
-            uiDevice.waitForIdle()
             SystemClock.sleep(100)
+            val finalLength = refreshEditableTextLength(node)
+            Log.i(
+                TAG,
+                "[inputText] ACTION_PASTE startingLength=$startingTextLength finalLength=$finalLength"
+            )
             return true
         } finally {
             node?.recycle()
@@ -463,6 +787,25 @@ class Service(
     @Suppress("DEPRECATION")
     private fun supportsAction(node: AccessibilityNodeInfo, action: Int): Boolean {
         return node.actions and action != 0
+    }
+
+    private fun AccessibilityNodeInfo.safeTextLength(): Int {
+        if (isShowingHintText) {
+            return 0
+        }
+        return text?.toString()?.length ?: 0
+    }
+
+    private inline fun <T> AccessibilityNodeInfo?.useAndRecycle(block: (AccessibilityNodeInfo) -> T): T {
+        if (this == null) {
+            throw IllegalStateException("[eraseText] editable target missing during refresh")
+        }
+
+        try {
+            return block(this)
+        } finally {
+            recycle()
+        }
     }
 
     override fun screenshot(
