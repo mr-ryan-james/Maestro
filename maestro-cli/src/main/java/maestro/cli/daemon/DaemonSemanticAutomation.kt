@@ -181,7 +181,7 @@ internal object DaemonSemanticAutomation {
 
         addNode("automation-bridge-enabled", "true")
         addNode("automation-bridge-ready", "true")
-        if (state.userId != null || state.firebaseUid != null) {
+        if (state.userId != null || state.authUserId != null || state.firebaseUid != null) {
             addNode("automation-bridge-auth-ready", "true")
         }
         if (state.metroConnected) {
@@ -227,6 +227,9 @@ internal object DaemonSemanticAutomation {
         }
         if (!state.userId.isNullOrBlank()) {
             addNode("automation-bridge-user-id", state.userId)
+        }
+        if (!state.authUserId.isNullOrBlank()) {
+            addNode("automation-bridge-auth-user-id", state.authUserId)
         }
         if (!state.firebaseUid.isNullOrBlank()) {
             addNode("automation-bridge-firebase-uid", state.firebaseUid)

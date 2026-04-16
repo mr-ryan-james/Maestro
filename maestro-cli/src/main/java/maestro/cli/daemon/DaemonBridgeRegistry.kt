@@ -1,5 +1,6 @@
 package maestro.cli.daemon
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import io.ktor.server.websocket.DefaultWebSocketServerSession
@@ -21,6 +22,7 @@ object DaemonBridgeRegistry {
         val appId: String? = null,
         val route: String? = null,
         val userId: String? = null,
+        val authUserId: String? = null,
         val firebaseUid: String? = null,
         val metroConnected: Boolean = false,
         val debugUiVisible: Boolean = false,
@@ -47,6 +49,7 @@ object DaemonBridgeRegistry {
         val stateVersion: Long? = null,
         val route: String? = null,
         val userId: String? = null,
+        val authUserId: String? = null,
         val firebaseUid: String? = null,
     )
 
@@ -58,6 +61,7 @@ object DaemonBridgeRegistry {
         val pendingResults: ConcurrentHashMap<String, CompletableDeferred<CommandResult>> = ConcurrentHashMap(),
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     private data class IncomingFrame(
         val type: String? = null,
         val appId: String? = null,
@@ -68,6 +72,7 @@ object DaemonBridgeRegistry {
         val stateVersion: Long? = null,
         val route: String? = null,
         val userId: String? = null,
+        val authUserId: String? = null,
         val firebaseUid: String? = null,
     )
 
@@ -179,7 +184,8 @@ object DaemonBridgeRegistry {
                     stateVersion = frame.stateVersion,
                     route = frame.route,
                     userId = frame.userId,
-                    firebaseUid = frame.firebaseUid,
+                    authUserId = frame.authUserId ?: frame.firebaseUid,
+                    firebaseUid = frame.firebaseUid ?: frame.authUserId,
                 ),
                 statePatch = frame.state,
             )
@@ -283,8 +289,13 @@ object DaemonBridgeRegistry {
             userId = statePatch["user_id"]?.toString()
                 ?: statePatch["userId"]?.toString()
                 ?: previous.state.userId,
+            authUserId = statePatch["auth_user_id"]?.toString()
+                ?: statePatch["authUserId"]?.toString()
+                ?: previous.state.authUserId,
             firebaseUid = statePatch["firebase_uid"]?.toString()
                 ?: statePatch["firebaseUid"]?.toString()
+                ?: statePatch["auth_user_id"]?.toString()
+                ?: statePatch["authUserId"]?.toString()
                 ?: previous.state.firebaseUid,
             metroConnected = (statePatch["metro_connected"] as? Boolean)
                 ?: (statePatch["metroConnected"] as? Boolean)

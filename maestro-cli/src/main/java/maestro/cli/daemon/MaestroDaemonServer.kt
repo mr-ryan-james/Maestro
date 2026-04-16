@@ -1065,30 +1065,59 @@ internal suspend fun runMacro(
 
         "ensure_logged_in_fast" -> {
             val customToken = args.stringValue("custom_token", "customToken")
-                ?: error("run_macro.args.customToken is required")
+            val authUserId = args.stringValue("auth_user_id", "authUserId")
+                ?: args.stringValue("uid")
+                ?: customToken
+            val userId = args.stringValue("user_id", "userId")
+                ?: authUserId
+            val phoneNumber = args.stringValue("phone_number", "phoneNumber")
+            val authMode = when ((args.stringValue("auth_mode", "authMode") ?: "override").trim().lowercase()) {
+                "override", "local", "local-override", "id-token" -> "override"
+                "better-auth-real", "better_auth_real", "real" -> "better-auth-real"
+                else -> "auto"
+            }
+            if (authMode != "better-auth-real" && authUserId == null && userId == null) {
+                error("run_macro.args.authUserId or run_macro.args.userId is required unless authMode=better-auth-real")
+            }
             val route = args.stringValue("route") ?: "chats"
             val commandId = args.stringValue("command_id", "commandId")
                 ?: "ensure-logged-in-fast-${System.currentTimeMillis()}"
             val timeoutMs = args.longValue("timeout_ms", "timeoutMs") ?: 20_000L
+            val waitForNavigationMs = args.intValue("wait_for_navigation_ms", "waitForNavigationMs") ?: 15_000
             val result = if (!sessionHandle.appId.isNullOrBlank() && DaemonBridgeRegistry.isConnected(sessionHandle.appId)) {
+                val bridgeArgs = mutableMapOf<String, Any>(
+                    "authMode" to authMode,
+                    "route" to route,
+                    "commandId" to commandId,
+                    "waitForNavigationMs" to waitForNavigationMs,
+                )
+                authUserId?.let { bridgeArgs["authUserId"] = it }
+                userId?.let { bridgeArgs["userId"] = it }
+                phoneNumber?.let { bridgeArgs["phoneNumber"] = it }
+                customToken?.let { bridgeArgs["customToken"] = it }
                 sendBridgeCommandWithRecovery(
                     appId = sessionHandle.appId,
                     kind = "bootstrapAuth",
                     commandId = commandId,
                     timeoutMs = timeoutMs,
                     commandName = "bootstrap",
-                    args = mapOf(
-                        "customToken" to customToken,
-                        "route" to route,
-                        "commandId" to commandId,
-                        "waitForNavigationMs" to (args.intValue("wait_for_navigation_ms", "waitForNavigationMs") ?: 15_000),
-                    ),
+                    args = bridgeArgs,
                 )
             } else {
-                val encodedToken = urlEncode(customToken)
+                val deepLink = buildString {
+                    append("thrivify://automation/bootstrap?")
+                    append("authMode=${urlEncode(authMode)}")
+                    append("&route=${urlEncode(route)}")
+                    append("&commandId=${urlEncode(commandId)}")
+                    append("&waitForNavigationMs=$waitForNavigationMs")
+                    authUserId?.let { append("&authUserId=${urlEncode(it)}") }
+                    userId?.let { append("&userId=${urlEncode(it)}") }
+                    phoneNumber?.let { append("&phoneNumber=${urlEncode(it)}") }
+                    customToken?.let { append("&customToken=${urlEncode(it)}") }
+                }
                 openDeepLink(
                     sessionHandle,
-                    "thrivify://automation/bootstrap?customToken=$encodedToken&route=$route&commandId=$commandId",
+                    deepLink,
                 )
                 awaitRouteMarker(sessionHandle, "automation-bridge-auth-ready")
                 awaitRouteMarker(sessionHandle, "automation-bridge-route-${route.lowercase()}")
@@ -1499,7 +1528,10 @@ private suspend fun awaitDaemonEvent(
         val state = DaemonBridgeRegistry.semanticState(appId)
         val matched = when (kind) {
             "bridge_ready" -> state != null
-            "bridge_auth_ready" -> state?.userId?.isNotBlank() == true || state?.firebaseUid?.isNotBlank() == true
+            "bridge_auth_ready" ->
+                state?.userId?.isNotBlank() == true ||
+                    state?.authUserId?.isNotBlank() == true ||
+                    state?.firebaseUid?.isNotBlank() == true
             "bridge_route" -> state?.route.equals(event.stringValue("route"), ignoreCase = true)
             "semantic_key_equals" -> semanticStateValue(state, event.stringValue("key")).equals(event.stringValue("value"))
             "conversation_ready" -> {
@@ -1554,6 +1586,7 @@ private fun semanticStateValue(state: DaemonBridgeRegistry.SemanticState?, key: 
     return when (key) {
         "route" -> state.route
         "user_id", "userId" -> state.userId
+        "auth_user_id", "authUserId" -> state.authUserId
         "firebase_uid", "firebaseUid" -> state.firebaseUid
         "visible_conversation_id", "visibleConversationId" -> state.visibleConversationId
         "prompt_generation_state", "promptGenerationState" -> state.promptGenerationState
@@ -1569,6 +1602,7 @@ private fun semanticStateJson(state: DaemonBridgeRegistry.SemanticState): JsonOb
     state.appId?.let { put("app_id", JsonPrimitive(it)) }
     state.route?.let { put("route", JsonPrimitive(it)) }
     state.userId?.let { put("user_id", JsonPrimitive(it)) }
+    state.authUserId?.let { put("auth_user_id", JsonPrimitive(it)) }
     state.firebaseUid?.let { put("firebase_uid", JsonPrimitive(it)) }
     put("metro_connected", JsonPrimitive(state.metroConnected))
     put("debug_ui_visible", JsonPrimitive(state.debugUiVisible))
@@ -1840,4 +1874,3 @@ private suspend fun ApplicationCall.respondJson(
 
 private fun normalizeBatchActionType(raw: String): String =
     raw.trim().replace("-", "_").lowercase()
-
