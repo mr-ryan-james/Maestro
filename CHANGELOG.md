@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+- Screenshot auto-resize to 2000px longest edge (hardcoded
+  `DEFAULT_SCREENSHOT_MAX_DIM` in `ScreenshotUtils`). Applies to
+  YAML-triggered screenshots, debug/failure screenshots, and MCP
+  `take_screenshot` payload. Override via `MAESTRO_SCREENSHOT_MAX_DIM`
+  env (0 disables) or per-YAML `maxDim:`.
+
 ## 2.3.0
 
 - Add web support for `clearState` command
