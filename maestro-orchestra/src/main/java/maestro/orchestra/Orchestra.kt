@@ -55,6 +55,7 @@ import maestro.utils.Insight
 import maestro.utils.Insights
 import maestro.utils.MaestroTimer
 import maestro.utils.NoopInsights
+import maestro.utils.ScreenshotUtils
 import maestro.utils.StringUtils.toRegexSafe
 import okhttp3.OkHttpClient
 import okio.Buffer
@@ -1438,6 +1439,13 @@ class Orchestra(
             }
             maestro.takeScreenshot(fileSink, false, bounds)
         }
+
+        // Harness-safe resize: downsamples to 2000px longest edge by default.
+        // Env override via MAESTRO_SCREENSHOT_MAX_DIM; per-command YAML override added in a later task.
+        val screenshotFile = resolveScreenshotFile(screenshotsDir, pathStr)
+        if (screenshotFile != null) {
+            ScreenshotUtils.resizeIfNeeded(screenshotFile)
+        }
         return false
     }
 
@@ -2131,6 +2139,11 @@ class Orchestra(
                 "Unable to create directory for file: ${absoluteFile.parentFile.absolutePath}"
             )
         }
+    }
+
+    private fun resolveScreenshotFile(dir: Path?, relativePath: String): File? {
+        val resolved = dir?.resolve(relativePath)?.toFile() ?: File(relativePath)
+        return resolved.takeIf { it.isFile && it.length() > 0 }
     }
 
     private suspend fun executeDefineVariablesCommands(commands: List<MaestroCommand>, config: MaestroConfig?) {
