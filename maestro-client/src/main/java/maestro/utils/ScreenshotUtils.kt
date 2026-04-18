@@ -7,11 +7,76 @@ import okio.Buffer
 import okio.Sink
 import org.slf4j.LoggerFactory
 import java.awt.image.BufferedImage
+import java.io.File
 import javax.imageio.ImageIO
 
 class ScreenshotUtils {
     companion object {
         private val LOGGER = LoggerFactory.getLogger(ScreenshotUtils::class.java)
+
+        const val DEFAULT_SCREENSHOT_MAX_DIM = 2000
+
+        /**
+         * Resampling cap applied after every PNG screenshot write. Default is
+         * 2000px longest edge (harness-safe for multi-image AI consumers).
+         * Override with env `MAESTRO_SCREENSHOT_MAX_DIM`:
+         *   - positive integer raises the cap
+         *   - `0` disables resizing entirely
+         */
+        fun effectiveMaxDim(override: Int? = null): Int {
+            if (override != null) return override
+            val env = System.getenv("MAESTRO_SCREENSHOT_MAX_DIM")?.toIntOrNull()
+            return env ?: DEFAULT_SCREENSHOT_MAX_DIM
+        }
+
+        fun resizeIfNeeded(file: File, maxDim: Int = effectiveMaxDim()) {
+            if (maxDim <= 0) return
+            try {
+                val image = ImageIO.read(file) ?: return
+                val longest = maxOf(image.width, image.height)
+                if (longest <= maxDim) return
+                val scale = maxDim.toDouble() / longest.toDouble()
+                val targetW = (image.width * scale).toInt().coerceAtLeast(1)
+                val targetH = (image.height * scale).toInt().coerceAtLeast(1)
+                val scaled = BufferedImage(targetW, targetH, BufferedImage.TYPE_INT_RGB)
+                val g = scaled.createGraphics()
+                g.setRenderingHint(
+                    java.awt.RenderingHints.KEY_INTERPOLATION,
+                    java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR,
+                )
+                g.drawImage(image, 0, 0, targetW, targetH, null)
+                g.dispose()
+                ImageIO.write(scaled, "PNG", file)
+            } catch (e: Exception) {
+                LOGGER.warn("resizeIfNeeded failed for ${file.absolutePath}", e)
+            }
+        }
+
+        fun resizeBytesIfNeeded(bytes: ByteArray, maxDim: Int = effectiveMaxDim()): ByteArray {
+            if (maxDim <= 0) return bytes
+            return try {
+                val image = ImageIO.read(bytes.inputStream()) ?: return bytes
+                val longest = maxOf(image.width, image.height)
+                if (longest <= maxDim) return bytes
+                val scale = maxDim.toDouble() / longest.toDouble()
+                val targetW = (image.width * scale).toInt().coerceAtLeast(1)
+                val targetH = (image.height * scale).toInt().coerceAtLeast(1)
+                val scaled = BufferedImage(targetW, targetH, BufferedImage.TYPE_INT_RGB)
+                val g = scaled.createGraphics()
+                g.setRenderingHint(
+                    java.awt.RenderingHints.KEY_INTERPOLATION,
+                    java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR,
+                )
+                g.drawImage(image, 0, 0, targetW, targetH, null)
+                g.dispose()
+                val out = java.io.ByteArrayOutputStream()
+                ImageIO.write(scaled, "PNG", out)
+                out.toByteArray()
+            } catch (e: Exception) {
+                LOGGER.warn("resizeBytesIfNeeded failed", e)
+                bytes
+            }
+        }
 
         fun takeScreenshot(out: Sink, compressed: Boolean, driver: Driver) {
             LOGGER.trace("Taking screenshot to output sink")
