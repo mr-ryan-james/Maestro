@@ -404,6 +404,7 @@ data class YamlFluentCommand(
                         label = takeScreenshot.label,
                         optional = takeScreenshot.optional,
                         cropOn = takeScreenshot.cropOn?.let { toElementSelector(selectorUnion = it) },
+                        maxDim = takeScreenshot.maxDim,
                     )
                 )
             )

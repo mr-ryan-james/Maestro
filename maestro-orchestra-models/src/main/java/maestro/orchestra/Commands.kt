@@ -726,6 +726,7 @@ data class TakeScreenshotCommand(
     val cropOn: ElementSelector? = null,
     override val label: String? = null,
     override val optional: Boolean = false,
+    val maxDim: Int? = null,
 ) : Command {
 
     override val originalDescription: String

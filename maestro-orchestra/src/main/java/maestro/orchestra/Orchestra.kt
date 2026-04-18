@@ -1441,10 +1441,13 @@ class Orchestra(
         }
 
         // Harness-safe resize: downsamples to 2000px longest edge by default.
-        // Env override via MAESTRO_SCREENSHOT_MAX_DIM; per-command YAML override added in a later task.
+        // Precedence: per-command `maxDim:` YAML override > MAESTRO_SCREENSHOT_MAX_DIM env > default cap.
         val screenshotFile = resolveScreenshotFile(screenshotsDir, pathStr)
         if (screenshotFile != null) {
-            ScreenshotUtils.resizeIfNeeded(screenshotFile)
+            ScreenshotUtils.resizeIfNeeded(
+                screenshotFile,
+                maxDim = ScreenshotUtils.effectiveMaxDim(command.maxDim),
+            )
         }
         return false
     }

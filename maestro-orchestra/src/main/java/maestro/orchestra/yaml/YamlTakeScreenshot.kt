@@ -7,6 +7,7 @@ data class YamlTakeScreenshot(
     val label: String? = null,
     val cropOn: YamlElementSelectorUnion? = null,
     val optional: Boolean = false,
+    val maxDim: Int? = null,
 ) {
 
     companion object {
