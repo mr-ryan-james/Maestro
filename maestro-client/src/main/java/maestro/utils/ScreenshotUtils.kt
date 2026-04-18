@@ -33,19 +33,7 @@ class ScreenshotUtils {
             if (maxDim <= 0) return
             try {
                 val image = ImageIO.read(file) ?: return
-                val longest = maxOf(image.width, image.height)
-                if (longest <= maxDim) return
-                val scale = maxDim.toDouble() / longest.toDouble()
-                val targetW = (image.width * scale).toInt().coerceAtLeast(1)
-                val targetH = (image.height * scale).toInt().coerceAtLeast(1)
-                val scaled = BufferedImage(targetW, targetH, BufferedImage.TYPE_INT_RGB)
-                val g = scaled.createGraphics()
-                g.setRenderingHint(
-                    java.awt.RenderingHints.KEY_INTERPOLATION,
-                    java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR,
-                )
-                g.drawImage(image, 0, 0, targetW, targetH, null)
-                g.dispose()
+                val scaled = resizeImage(image, maxDim) ?: return
                 ImageIO.write(scaled, "PNG", file)
             } catch (e: Exception) {
                 LOGGER.warn("resizeIfNeeded failed for ${file.absolutePath}", e)
@@ -56,19 +44,7 @@ class ScreenshotUtils {
             if (maxDim <= 0) return bytes
             return try {
                 val image = ImageIO.read(bytes.inputStream()) ?: return bytes
-                val longest = maxOf(image.width, image.height)
-                if (longest <= maxDim) return bytes
-                val scale = maxDim.toDouble() / longest.toDouble()
-                val targetW = (image.width * scale).toInt().coerceAtLeast(1)
-                val targetH = (image.height * scale).toInt().coerceAtLeast(1)
-                val scaled = BufferedImage(targetW, targetH, BufferedImage.TYPE_INT_RGB)
-                val g = scaled.createGraphics()
-                g.setRenderingHint(
-                    java.awt.RenderingHints.KEY_INTERPOLATION,
-                    java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR,
-                )
-                g.drawImage(image, 0, 0, targetW, targetH, null)
-                g.dispose()
+                val scaled = resizeImage(image, maxDim) ?: return bytes
                 val out = java.io.ByteArrayOutputStream()
                 ImageIO.write(scaled, "PNG", out)
                 out.toByteArray()
@@ -76,6 +52,30 @@ class ScreenshotUtils {
                 LOGGER.warn("resizeBytesIfNeeded failed", e)
                 bytes
             }
+        }
+
+        /**
+         * Returns a downscaled copy of [image] whose longest edge fits [maxDim],
+         * or `null` when the image is already within the cap (caller should treat
+         * that as a no-op).
+         */
+        private fun resizeImage(image: BufferedImage, maxDim: Int): BufferedImage? {
+            val longest = maxOf(image.width, image.height)
+            if (longest <= maxDim) return null
+            val scale = maxDim.toDouble() / longest.toDouble()
+            val targetW = (image.width * scale).toInt().coerceAtLeast(1)
+            val targetH = (image.height * scale).toInt().coerceAtLeast(1)
+            // TYPE_INT_RGB is intentional: screenshot PNGs are opaque in practice, and
+            // dropping any incidental alpha keeps the rewritten PNG smaller.
+            val scaled = BufferedImage(targetW, targetH, BufferedImage.TYPE_INT_RGB)
+            val g = scaled.createGraphics()
+            g.setRenderingHint(
+                java.awt.RenderingHints.KEY_INTERPOLATION,
+                java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR,
+            )
+            g.drawImage(image, 0, 0, targetW, targetH, null)
+            g.dispose()
+            return scaled
         }
 
         fun takeScreenshot(out: Sink, compressed: Boolean, driver: Driver) {

@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.awt.image.BufferedImage
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.file.Path
 import javax.imageio.ImageIO
@@ -66,6 +67,35 @@ class ScreenshotUtilsResizeTest {
         ScreenshotUtils.resizeIfNeeded(src, maxDim = 2000)
     }
 
+    @Test
+    fun `resizeBytesIfNeeded downsamples wide PNG bytes`() {
+        val original = solidPngBytes(width = 3000, height = 1500)
+
+        val resizedBytes = ScreenshotUtils.resizeBytesIfNeeded(original, maxDim = 2000)
+
+        val resized = ImageIO.read(resizedBytes.inputStream())
+        assertEquals(2000, resized.width)
+        assertEquals(1000, resized.height)
+    }
+
+    @Test
+    fun `resizeBytesIfNeeded is a no-op when within max dimension`() {
+        val original = solidPngBytes(width = 1500, height = 1000)
+
+        val resizedBytes = ScreenshotUtils.resizeBytesIfNeeded(original, maxDim = 2000)
+
+        assertTrue(resizedBytes.contentEquals(original))
+    }
+
+    @Test
+    fun `resizeBytesIfNeeded returns original bytes on corrupt input`() {
+        val original = "not a png".toByteArray()
+
+        val resizedBytes = ScreenshotUtils.resizeBytesIfNeeded(original, maxDim = 2000)
+
+        assertTrue(resizedBytes.contentEquals(original))
+    }
+
     private fun writeSolidPng(target: File, width: Int, height: Int) {
         val img = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
         val g = img.createGraphics()
@@ -73,5 +103,16 @@ class ScreenshotUtilsResizeTest {
         g.fillRect(0, 0, width, height)
         g.dispose()
         ImageIO.write(img, "PNG", target)
+    }
+
+    private fun solidPngBytes(width: Int, height: Int): ByteArray {
+        val img = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
+        val g = img.createGraphics()
+        g.color = java.awt.Color.GRAY
+        g.fillRect(0, 0, width, height)
+        g.dispose()
+        val out = ByteArrayOutputStream()
+        ImageIO.write(img, "PNG", out)
+        return out.toByteArray()
     }
 }
