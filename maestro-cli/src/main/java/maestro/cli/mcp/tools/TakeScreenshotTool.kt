@@ -44,14 +44,15 @@ object TakeScreenshotTool {
                 val result = ToolSupport.withSession(sessionManager, request, deviceId) { session ->
                     val buffer = Buffer()
                     session.maestro.takeScreenshot(buffer, true)
-                    val pngBytes = buffer.readByteArray()
-                    
+                    val rawPngBytes = buffer.readByteArray()
+                    val pngBytes = maestro.utils.ScreenshotUtils.resizeBytesIfNeeded(rawPngBytes)
+
                     // Convert PNG to JPEG
                     val pngImage = ImageIO.read(ByteArrayInputStream(pngBytes))
                     val jpegOutput = ByteArrayOutputStream()
                     ImageIO.write(pngImage, "JPEG", jpegOutput)
                     val jpegBytes = jpegOutput.toByteArray()
-                    
+
                     val base64 = Base64.getEncoder().encodeToString(jpegBytes)
                     base64
                 }
