@@ -4,6 +4,7 @@ import java.io.File
 import maestro.Maestro
 import maestro.cli.report.FlowDebugOutput
 import maestro.cli.runner.CommandStatus
+import maestro.utils.ScreenshotUtils as CoreScreenshotUtils
 import okio.Buffer
 import okio.sink
 
@@ -22,6 +23,7 @@ object ScreenshotUtils {
                 .createTempFile("screenshot-${System.currentTimeMillis()}", ".png")
                 .also { it.deleteOnExit() } // save to another dir before exiting
             maestro.takeScreenshot(out.sink(), false)
+            CoreScreenshotUtils.resizeIfNeeded(out)
             debugOutput.screenshots.add(
                 FlowDebugOutput.Screenshot(
                     screenshot = out,
@@ -41,6 +43,7 @@ object ScreenshotUtils {
                 .createTempFile("screenshot-${status}-${System.currentTimeMillis()}", ".png")
                 .also { it.deleteOnExit() } // save to another dir before exiting
             maestro.takeScreenshot(out.sink(), false)
+            CoreScreenshotUtils.resizeIfNeeded(out)
             debugOutput.screenshots.add(
                 FlowDebugOutput.Screenshot(
                     screenshot = out,
@@ -59,6 +62,7 @@ object ScreenshotUtils {
             .createTempFile("ai-screenshot-${System.currentTimeMillis()}", ".png")
             .also { it.deleteOnExit() }
         out.outputStream().use { it.write(buffer.readByteArray()) }
+        CoreScreenshotUtils.resizeIfNeeded(out)
         return out
     }
 
