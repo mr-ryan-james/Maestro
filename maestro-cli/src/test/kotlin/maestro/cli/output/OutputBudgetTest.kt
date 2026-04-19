@@ -4,8 +4,10 @@ import com.google.common.truth.Truth.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import java.io.ByteArrayOutputStream
+import java.io.FileOutputStream
 import java.io.PrintStream
 import java.nio.charset.StandardCharsets
+import java.nio.file.Files
 
 class OutputBudgetTest {
 
@@ -36,22 +38,69 @@ class OutputBudgetTest {
     }
 
     @Test
-    fun `shared budget truncates combined stdout and stderr writes`() {
+    fun `non seekable stdout truncates writes at configured cap`() {
         val stdoutBytes = ByteArrayOutputStream()
         val stderrBytes = ByteArrayOutputStream()
         val installed = OutputBudget.installForStreams(
-            maxBytes = 7,
+            maxBytes = 4,
             stdout = PrintStream(stdoutBytes, true, StandardCharsets.UTF_8),
             stderr = PrintStream(stderrBytes, true, StandardCharsets.UTF_8),
         )
 
-        installed.stdout.print("abcd")
-        installed.stderr.print("efgh")
+        installed.stdout.print("abcdef")
         installed.stdout.flush()
-        installed.stderr.flush()
 
         assertThat(stdoutBytes.toString(StandardCharsets.UTF_8)).isEqualTo("abcd")
-        assertThat(stderrBytes.toString(StandardCharsets.UTF_8)).isEqualTo("efg")
+        assertThat(stderrBytes.toString(StandardCharsets.UTF_8)).isEmpty()
+        assertThat(installed.remainingBytes()).isEqualTo(0)
+    }
+
+    @Test
+    fun `stderr keeps capped stop behavior`() {
+        val stdoutBytes = ByteArrayOutputStream()
+        val stderrBytes = ByteArrayOutputStream()
+        val installed = OutputBudget.installForStreams(
+            maxBytes = 3,
+            stdout = PrintStream(stdoutBytes, true, StandardCharsets.UTF_8),
+            stderr = PrintStream(stderrBytes, true, StandardCharsets.UTF_8),
+        )
+
+        installed.stderr.print("abcd")
+        installed.stderr.flush()
+
+        assertThat(stdoutBytes.toString(StandardCharsets.UTF_8)).isEmpty()
+        assertThat(stderrBytes.toString(StandardCharsets.UTF_8)).isEqualTo("abc")
+    }
+
+    @Test
+    fun `direct file backed stdout preserves rolling tail within cap`() {
+        val stdoutPath = Files.createTempFile("output-budget-tail", ".txt")
+        val stdoutHandle = FileOutputStream(stdoutPath.toFile())
+        val stdoutPrintStream = PrintStream(stdoutHandle, true, StandardCharsets.UTF_8)
+        val stderrBytes = ByteArrayOutputStream()
+        val installed = OutputBudget.installForStreams(
+            maxBytes = 4,
+            stdout = stdoutPrintStream,
+            stderr = PrintStream(stderrBytes, true, StandardCharsets.UTF_8),
+            stdoutSeekableChannel = stdoutHandle.channel,
+            stdoutHandleToKeepAlive = stdoutHandle,
+        )
+
+        installed.stdout.print("ab")
+        installed.stdout.flush()
+        assertThat(Files.readString(stdoutPath, StandardCharsets.UTF_8)).isEqualTo("ab")
+        assertThat(Files.size(stdoutPath)).isEqualTo(2L)
+
+        installed.stdout.print("cdef")
+        installed.stdout.flush()
+        assertThat(Files.readString(stdoutPath, StandardCharsets.UTF_8)).isEqualTo("cdef")
+        assertThat(Files.size(stdoutPath)).isEqualTo(4L)
+
+        installed.stdout.print("gh")
+        installed.stdout.flush()
+        assertThat(Files.readString(stdoutPath, StandardCharsets.UTF_8)).isEqualTo("efgh")
+        assertThat(Files.size(stdoutPath)).isEqualTo(4L)
+        assertThat(stderrBytes.toString(StandardCharsets.UTF_8)).isEmpty()
         assertThat(installed.remainingBytes()).isEqualTo(0)
     }
 
