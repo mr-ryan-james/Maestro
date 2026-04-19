@@ -27,6 +27,11 @@ import kotlin.random.Random
 
 object SocketUtils {
 
+    internal var networkInterfacesProvider: () -> java.util.Enumeration<NetworkInterface> =
+        NetworkInterface::getNetworkInterfaces
+
+    internal var localHostProvider: () -> InetAddress = InetAddress::getLocalHost
+
     fun nextFreePort(from: Int, to: Int): Int {
         val mid = (to - from) / 2 + from
         val range = Random.nextInt(from, mid)..Random.nextInt(mid, to)
@@ -39,7 +44,7 @@ object SocketUtils {
     }
 
     fun localIp(): String {
-        return NetworkInterface.getNetworkInterfaces()
+        return networkInterfacesProvider()
             .toList()
             .firstNotNullOfOrNull { networkInterface ->
                 networkInterface.inetAddresses
@@ -51,7 +56,7 @@ object SocketUtils {
                     }
                     ?.hostAddress
             }
-            ?: InetAddress.getLocalHost().hostAddress
+            ?: localHostProvider().hostAddress
     }
 
 }

@@ -1,6 +1,5 @@
-import io.mockk.every
-import io.mockk.mockkStatic
 import maestro.utils.SocketUtils
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -14,6 +13,12 @@ import java.util.*
 class SocketUtilsTest {
 
     private fun <T> List<T>.toEnumeration(): Enumeration<T> = Collections.enumeration(this)
+
+    @AfterEach
+    fun tearDown() {
+        SocketUtils.networkInterfacesProvider = NetworkInterface::getNetworkInterfaces
+        SocketUtils.localHostProvider = InetAddress::getLocalHost
+    }
 
     @Test
     fun `nextFreePort should return a free port within the specified range`() {
@@ -45,11 +50,12 @@ class SocketUtilsTest {
 
     @Test
     fun `localIp should return localhost address if no network interfaces are available`() {
-        mockkStatic(NetworkInterface::class)
-        every { NetworkInterface.getNetworkInterfaces() } returns listOf<NetworkInterface>().toEnumeration()
+        val localhost = InetAddress.getByName("127.0.0.1")
+        SocketUtils.networkInterfacesProvider = { listOf<NetworkInterface>().toEnumeration() }
+        SocketUtils.localHostProvider = { localhost }
 
         val ip = SocketUtils.localIp()
 
-        assertEquals(InetAddress.getLocalHost().hostAddress, ip)
+        assertEquals(localhost.hostAddress, ip)
     }
 }
