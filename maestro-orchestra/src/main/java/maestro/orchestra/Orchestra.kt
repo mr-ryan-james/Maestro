@@ -2322,6 +2322,7 @@ internal fun ElementSelector.toAutomationSelectorFastPath(): AutomationSelector?
         || containsChild != null
         || !containsDescendants.isNullOrEmpty()
         || !traits.isNullOrEmpty()
+        || index != null
         || childOf != null
         || css != null
     ) {

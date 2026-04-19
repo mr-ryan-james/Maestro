@@ -127,7 +127,8 @@ interface Driver {
     fun queryAutomationElements(
         request: AutomationQueryRequest,
     ): AutomationQueryResult {
-        return contentDescriptor(excludeKeyboardElements = request.excludeKeyboardElements)
+        return ViewHierarchy.from(this, excludeKeyboardElements = request.excludeKeyboardElements)
+            .root
             .queryAutomationElements(request)
     }
 
