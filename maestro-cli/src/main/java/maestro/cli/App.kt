@@ -41,6 +41,7 @@ import maestro.cli.command.StartDeviceCommand
 import maestro.cli.command.StudioCommand
 import maestro.cli.command.TestCommand
 import maestro.cli.insights.TestAnalysisManager
+import maestro.cli.output.OutputBudget
 import maestro.cli.update.Updates
 import maestro.cli.util.ChangeLogUtils
 import maestro.cli.util.ErrorReporter
@@ -127,6 +128,7 @@ fun main(args: Array<String>) {
     // https://stackoverflow.com/a/17544259
     try {
         System.setProperty("apple.awt.UIElement", "true")
+        OutputBudget.installIfNeeded(protocolMode)
         if (!protocolMode) {
             Analytics.warnAndEnableAnalyticsIfNotDisable()
         }
@@ -146,7 +148,7 @@ fun main(args: Array<String>) {
                 runCatching { ErrorReporter.report(ex, cmdParseResult) }
 
                 // make errors red
-                println()
+                cmd.err.println()
                 cmd.colorScheme = CommandLine.Help.ColorScheme.Builder()
                     .errors(CommandLine.Help.Ansi.Style.fg_red)
                     .build()

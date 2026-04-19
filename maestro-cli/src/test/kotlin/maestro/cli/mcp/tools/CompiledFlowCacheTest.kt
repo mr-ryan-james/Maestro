@@ -124,7 +124,10 @@ internal class CompiledFlowCacheTest {
         )
 
         val secondCompiled = CompiledFlowCache.compileFlowFile(flowPath)
-        val secondCommand = secondCompiled.commands.single().asCommand() as AssertConditionCommand
+        val secondCommand = secondCompiled.commands
+            .mapNotNull { it.asCommand() }
+            .filterIsInstance<AssertConditionCommand>()
+            .single()
 
         assertThat(firstCompiled.flowHash).isNotEqualTo(secondCompiled.flowHash)
         assertThat(secondCommand.condition.visibleNow?.idRegex).isEqualTo("home-tab-discover")

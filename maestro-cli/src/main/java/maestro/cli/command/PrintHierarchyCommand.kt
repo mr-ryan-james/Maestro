@@ -23,11 +23,13 @@ import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import maestro.TreeNode
 import maestro.cli.App
+import maestro.cli.CliError
 import maestro.cli.DisableAnsiMixin
 import maestro.cli.ShowHelpMixin
 import maestro.cli.analytics.Analytics
 import maestro.cli.analytics.PrintHierarchyFinishedEvent
 import maestro.cli.analytics.PrintHierarchyStartedEvent
+import maestro.cli.output.OutputBudget
 import maestro.cli.report.TestDebugReporter
 import maestro.cli.session.MaestroSessionManager
 import maestro.cli.view.yellow
@@ -37,6 +39,7 @@ import maestro.utils.chunkStringByWordCount
 import picocli.CommandLine
 import picocli.CommandLine.Option
 import java.lang.StringBuilder
+import java.nio.charset.StandardCharsets
 
 @CommandLine.Command(
     name = "hierarchy",
@@ -123,7 +126,7 @@ class PrintHierarchyCommand : Runnable {
                 it.message.chunkStringByWordCount(12).forEach { chunkedMessage ->
                     message.append("$chunkedMessage ")
                 }
-                println(message.toString())
+                System.err.println(message.toString())
             }
             val insights = CliInsights
 
@@ -132,32 +135,7 @@ class PrintHierarchyCommand : Runnable {
             val tree = session.maestro.viewHierarchy().root
 
             insights.unregisterListener(callback)
-
-            if (compact) {
-                // Output in CSV format
-                println("element_num,depth,attributes,parent_num")
-                val nodeToId = mutableMapOf<TreeNode, Int>()
-                val csv = StringBuilder()
-                
-                // Assign IDs to each node
-                var counter = 0
-                tree?.aggregate()?.forEach { node ->
-                    nodeToId[node] = counter++
-                }
-                
-                // Process tree recursively to generate CSV
-                processTreeToCSV(tree, 0, null, nodeToId, csv)
-                
-                println(csv.toString())
-            } else {
-                // Original JSON output format
-                val hierarchy = jacksonObjectMapper()
-                    .setSerializationInclusion(JsonInclude.Include.NON_NULL)
-                    .writerWithDefaultPrettyPrinter()
-                    .writeValueAsString(tree)
-                
-                println(hierarchy)
-            }
+            emitHierarchyOutput(tree)
         }
         
         // Track successful completion
@@ -168,6 +146,59 @@ class PrintHierarchyCommand : Runnable {
             durationMs = duration
         ))
         Analytics.flush()
+    }
+
+    internal fun emitHierarchyOutput(tree: TreeNode?) {
+        val payload = buildHierarchyOutput(tree)
+        val bytes = payload.toByteArray(StandardCharsets.UTF_8)
+        val outputBudget = OutputBudget.currentOrNull()
+        if (outputBudget != null) {
+            if (!outputBudget.writeAllOrNothingToOriginalStdout(bytes)) {
+                throw CliError(
+                    "Hierarchy output exceeds the configured output cap of ${outputBudget.maxBytes} bytes. " +
+                        "Set MAESTRO_OUTPUT_CAP_BYTES to a larger value up to ${OutputBudget.ABSOLUTE_MAX_BYTES} bytes."
+                )
+            }
+            return
+        }
+
+        System.out.write(bytes)
+        System.out.flush()
+    }
+
+    internal fun buildHierarchyOutput(tree: TreeNode?): String {
+        return if (compact) {
+            buildCompactHierarchyOutput(tree)
+        } else {
+            buildJsonHierarchyOutput(tree)
+        }
+    }
+
+    private fun buildJsonHierarchyOutput(tree: TreeNode?): String {
+        val hierarchy = jacksonObjectMapper()
+            .setSerializationInclusion(JsonInclude.Include.NON_NULL)
+            .writerWithDefaultPrettyPrinter()
+            .writeValueAsString(tree)
+
+        return "$hierarchy\n"
+    }
+
+    private fun buildCompactHierarchyOutput(tree: TreeNode?): String {
+        val nodeToId = mutableMapOf<TreeNode, Int>()
+        val csv = StringBuilder()
+
+        var counter = 0
+        tree?.aggregate()?.forEach { node ->
+            nodeToId[node] = counter++
+        }
+
+        processTreeToCSV(tree, 0, null, nodeToId, csv)
+
+        return buildString {
+            append("element_num,depth,attributes,parent_num\n")
+            append(csv)
+            append('\n')
+        }
     }
     
     private fun processTreeToCSV(

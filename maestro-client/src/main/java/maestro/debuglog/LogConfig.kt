@@ -1,6 +1,7 @@
 package maestro.debuglog
 
 import maestro.utils.MaestroRunMetadata
+import org.apache.logging.log4j.core.appender.ConsoleAppender
 import org.apache.logging.log4j.core.appender.FileAppender
 import org.apache.logging.log4j.core.config.Configurator
 import org.apache.logging.log4j.core.config.builder.api.ConfigurationBuilder
@@ -55,6 +56,7 @@ object LogConfig {
 
     private fun createConsoleAppender(builder: ConfigurationBuilder<BuiltConfiguration>): org.apache.logging.log4j.core.config.builder.api.AppenderComponentBuilder {
         val consoleAppender = builder.newAppender("Console", "CONSOLE")
+        consoleAppender.addAttribute("target", ConsoleAppender.Target.SYSTEM_ERR)
 
         val consoleLayout = builder.newLayout("PatternLayout")
         consoleLayout.addAttribute("pattern", CONSOLE_LOG_PATTERN)
