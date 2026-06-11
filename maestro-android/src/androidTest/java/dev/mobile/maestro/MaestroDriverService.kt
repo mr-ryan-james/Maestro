@@ -720,7 +720,14 @@ class Service(
         }
 
         refreshAccessibilityCache()
-        return findBestEditableTarget().useAndRecycle { it.safeTextLength() }
+        // If the previously-targeted editable can no longer be refreshed AND no editable
+        // can be re-located, the field has been unmounted (e.g. an auto-submitting OTP
+        // input that consumed the final character and navigated away). Treat that as a
+        // length-0 field instead of throwing: the write already landed and the surface
+        // moved on, so this post-write read is satisfied. Genuinely-wrong cases (no
+        // editable at the START of erase/replace) still fail via the explicit null
+        // checks in eraseTextFromFocusedEditable / focusEditableTarget.
+        return findBestEditableTarget().useAndRecycleOrElse(0) { it.safeTextLength() }
     }
 
     private fun refreshEditableTextValue(node: AccessibilityNodeInfo): String {
@@ -729,12 +736,14 @@ class Service(
         }
 
         refreshAccessibilityCache()
-        return findBestEditableTarget().useAndRecycle { it.safeTextValue() }
+        // See refreshEditableTextLength: a vanished editable during a post-write refresh
+        // means the field consumed the input and unmounted; report empty rather than crash.
+        return findBestEditableTarget().useAndRecycleOrElse("") { it.safeTextValue() }
     }
 
     private fun readFocusedEditableText(logPrefix: String): String {
         refreshAccessibilityCache()
-        return findBestEditableTarget().useAndRecycle {
+        return findBestEditableTarget().useAndRecycleOrElse("") {
             val text = it.safeTextValue()
             Log.i(TAG, "$logPrefix focusedEditableLength=${text.length}")
             text
@@ -1034,6 +1043,33 @@ class Service(
     private inline fun <T> AccessibilityNodeInfo?.useAndRecycle(block: (AccessibilityNodeInfo) -> T): T {
         if (this == null) {
             throw IllegalStateException("[eraseText] editable target missing during refresh")
+        }
+
+        try {
+            return block(this)
+        } finally {
+            recycle()
+        }
+    }
+
+    /**
+     * Non-fatal variant of [useAndRecycle]: when the editable target is missing during a
+     * post-write refresh/verification read, the field has been unmounted after consuming
+     * input (the auto-submitting OTP race). Rather than throwing — which aborts the whole
+     * gRPC session and kills the entire flow run — log it and return [fallback], treating
+     * the read as satisfied. Initial editable-discovery paths do NOT use this; they keep
+     * their explicit null checks so genuinely-missing targets still fail.
+     */
+    private inline fun <T> AccessibilityNodeInfo?.useAndRecycleOrElse(
+        fallback: T,
+        block: (AccessibilityNodeInfo) -> T
+    ): T {
+        if (this == null) {
+            Log.i(
+                TAG,
+                "[eraseText] editable target missing during refresh; field consumed input and unmounted, treating refresh as satisfied"
+            )
+            return fallback
         }
 
         try {
