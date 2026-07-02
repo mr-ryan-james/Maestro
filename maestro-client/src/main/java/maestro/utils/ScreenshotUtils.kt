@@ -2,6 +2,8 @@ package maestro.utils
 
 import com.github.romankh3.image.comparison.ImageComparison
 import maestro.Driver
+import maestro.MaestroException
+import maestro.TreeNode
 import maestro.ViewHierarchy
 import okio.Buffer
 import okio.Sink
@@ -105,14 +107,23 @@ class ScreenshotUtils {
             driver: Driver,
             timeoutMs: Int? = null
         ): ViewHierarchy {
-            var latestHierarchy: ViewHierarchy
+            // A view-hierarchy snapshot can time out here when the app's main thread is
+            // blocked (Metro lazily bundling a heavy screen, a long synchronous task). During
+            // settle that must read as "not settled yet — keep waiting", never as a hard
+            // failure that aborts the flow. safeViewHierarchy returns null on such a timeout;
+            // we then continue polling within the budget and hand back the best hierarchy we
+            // have when the budget expires.
+            var latestHierarchy: ViewHierarchy? = initialHierarchy
             if (timeoutMs != null) {
                 val endTime = System.currentTimeMillis() + timeoutMs
-                latestHierarchy = initialHierarchy ?: viewHierarchy(driver)
                 do {
-                    val hierarchyAfter = viewHierarchy(driver)
+                    val hierarchyAfter = safeViewHierarchy(driver)
+                    if (hierarchyAfter == null) {
+                        MaestroTimer.sleep(MaestroTimer.Reason.WAIT_TO_SETTLE, 200)
+                        continue
+                    }
                     if (latestHierarchy == hierarchyAfter) {
-                        val isLoading = latestHierarchy.root.attributes.getOrDefault("is-loading", "false").toBoolean()
+                        val isLoading = hierarchyAfter.root.attributes.getOrDefault("is-loading", "false").toBoolean()
                         if (!isLoading) {
                             return hierarchyAfter
                         }
@@ -120,22 +131,23 @@ class ScreenshotUtils {
                     latestHierarchy = hierarchyAfter
                 } while (System.currentTimeMillis() < endTime)
             } else {
-                latestHierarchy = initialHierarchy ?: viewHierarchy(driver)
                 repeat(10) {
-                    val hierarchyAfter = viewHierarchy(driver)
-                    if (latestHierarchy == hierarchyAfter) {
-                        val isLoading = latestHierarchy.root.attributes.getOrDefault("is-loading", "false").toBoolean()
-                        if (!isLoading) {
-                            return hierarchyAfter
+                    val hierarchyAfter = safeViewHierarchy(driver)
+                    if (hierarchyAfter != null) {
+                        if (latestHierarchy == hierarchyAfter) {
+                            val isLoading = hierarchyAfter.root.attributes.getOrDefault("is-loading", "false").toBoolean()
+                            if (!isLoading) {
+                                return hierarchyAfter
+                            }
                         }
+                        latestHierarchy = hierarchyAfter
                     }
-                    latestHierarchy = hierarchyAfter
 
                     MaestroTimer.sleep(MaestroTimer.Reason.WAIT_TO_SETTLE, 200)
                 }
             }
 
-            return latestHierarchy
+            return latestHierarchy ?: safeViewHierarchy(driver) ?: ViewHierarchy(TreeNode())
         }
 
         fun waitUntilScreenIsStatic(
@@ -175,6 +187,21 @@ class ScreenshotUtils {
 
         private fun viewHierarchy(driver: Driver): ViewHierarchy {
             return ViewHierarchy.from(driver, false)
+        }
+
+        /**
+         * A settle-time hierarchy fetch that tolerates a blocked app main thread: returns
+         * null (instead of throwing) when the underlying AX snapshot times out, so the
+         * settle loop can treat it as "not settled yet" and keep waiting. All other failures
+         * propagate unchanged.
+         */
+        private fun safeViewHierarchy(driver: Driver): ViewHierarchy? {
+            return try {
+                viewHierarchy(driver)
+            } catch (timeout: MaestroException.DriverTimeout) {
+                LOGGER.info("View hierarchy snapshot timed out during settle (app main thread busy); treating as not-settled", timeout)
+                null
+            }
         }
     }
 }

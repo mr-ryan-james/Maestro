@@ -1,6 +1,7 @@
 #import "AXClientProxy.h"
 #import "XCAccessibilityElement.h"
 #import "XCUIDevice.h"
+#import "XCAXClient_iOS.h"
 
 static id AXClient = nil;
 
@@ -24,6 +25,19 @@ static id AXClient = nil;
 
 - (NSDictionary *)defaultParameters {
     return [AXClient defaultParameters];
+}
+
+- (BOOL)setAXTimeoutSeconds:(double)seconds error:(NSError **)error {
+    XCAXClient_iOS *client = (XCAXClient_iOS *)AXClient;
+    if (![client respondsToSelector:@selector(_setAXTimeout:error:)]) {
+        if (error) {
+            *error = [NSError errorWithDomain:@"maestro.ax"
+                                         code:-1
+                                     userInfo:@{NSLocalizedDescriptionKey: @"_setAXTimeout:error: unavailable on this XCTest version"}];
+        }
+        return NO;
+    }
+    return [client _setAXTimeout:seconds error:error];
 }
 
 @end

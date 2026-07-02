@@ -36,6 +36,20 @@ class XCTestDriverClient(
         ?.coerceAtLeast(50L)
         ?: 200L
 
+    // "App busy" is a distinct, coarser failure class than a transient AX glitch: the app's
+    // main thread is genuinely blocked (Metro lazily bundling a heavy screen, a long
+    // synchronous task), so each snapshot attempt already burns ~30-60s server-side before
+    // failing. Give it its own, larger budget with a seconds-scale base delay so the retry
+    // window comfortably spans a multi-second bundle instead of failing on the first attempt.
+    private val busyRetryCount = System.getenv("MAESTRO_IOS_BUSY_RETRY_COUNT")
+        ?.toIntOrNull()
+        ?.coerceAtLeast(1)
+        ?: 6
+    private val busyRetryBaseMs = System.getenv("MAESTRO_IOS_BUSY_RETRY_BASE_MS")
+        ?.toLongOrNull()
+        ?.coerceAtLeast(100L)
+        ?: 1000L
+
     private lateinit var client: XCTestClient
 
     constructor(installer: XCTestInstaller, client: XCTestClient, reinstallDriver: Boolean = true): this(installer, reinstallDriver = reinstallDriver) {
@@ -386,43 +400,74 @@ class XCTestDriverClient(
         pathSegment: String,
         body: Any,
     ): String {
-        var attempt = 1
+        // Separate budgets per failure class so a genuinely busy app main thread
+        // (bundling/heavy work) keeps waiting on its own generous budget without being
+        // capped early by an unrelated transient-AX count, and vice versa.
+        var busyAttempts = 0
+        var axAttempts = 0
         while (true) {
             try {
                 return executeJsonRequest(pathSegment, body)
             } catch (error: Throwable) {
                 val classifierText = retryClassifierText(error)
-                val retryToken = retriableAXToken(classifierText)
-                if (retryToken == null || attempt >= axRetryCount) {
+                val classification = classifyRetry(classifierText) ?: throw error
+
+                val attempts: Int
+                val maxAttempts: Int
+                val baseMs: Long
+                when (classification.kind) {
+                    RetryKind.APP_BUSY -> {
+                        attempts = ++busyAttempts
+                        maxAttempts = busyRetryCount
+                        baseMs = busyRetryBaseMs
+                    }
+                    RetryKind.TRANSIENT_AX -> {
+                        attempts = ++axAttempts
+                        maxAttempts = axRetryCount
+                        baseMs = axRetryBaseMs
+                    }
+                }
+                if (attempts >= maxAttempts) {
                     throw error
                 }
 
-                val delayMs = axRetryDelayMs(attempt)
-                logger.warn(
-                    "Transient AX hierarchy failure (attempt {}/{}) host={} port={} delay={}ms token={} summary={}",
-                    attempt,
-                    axRetryCount,
-                    client.host,
-                    client.port,
-                    delayMs,
-                    retryToken,
-                    retryClassifierSummary(classifierText)
-                )
+                val delayMs = retryDelayMs(baseMs, attempts)
+                val summary = retryClassifierSummary(classifierText)
+                when (classification.kind) {
+                    RetryKind.APP_BUSY -> logger.warn(
+                        "App main thread busy — likely bundling/heavy work; waiting… (attempt {}/{}) host={} port={} delay={}ms token={} summary={}",
+                        attempts, maxAttempts, client.host, client.port, delayMs, classification.token, summary
+                    )
+                    RetryKind.TRANSIENT_AX -> logger.warn(
+                        "Transient AX hierarchy failure (attempt {}/{}) host={} port={} delay={}ms token={} summary={}",
+                        attempts, maxAttempts, client.host, client.port, delayMs, classification.token, summary
+                    )
+                }
                 try {
                     Thread.sleep(delayMs)
                 } catch (interrupted: InterruptedException) {
                     Thread.currentThread().interrupt()
                     throw error
                 }
-                attempt += 1
             }
         }
     }
 
-    private fun retriableAXToken(classifierText: String): String? {
-        return RETRIABLE_AX_ERROR_TOKENS.firstOrNull { token ->
+    private enum class RetryKind { APP_BUSY, TRANSIENT_AX }
+
+    private data class RetryClassification(val kind: RetryKind, val token: String)
+
+    private fun classifyRetry(classifierText: String): RetryClassification? {
+        // Check app-busy first: it is the more specific, higher-budget class.
+        RETRIABLE_APP_BUSY_TOKENS.firstOrNull { token ->
             classifierText.contains(token, ignoreCase = true)
-        }
+        }?.let { return RetryClassification(RetryKind.APP_BUSY, it) }
+
+        RETRIABLE_AX_ERROR_TOKENS.firstOrNull { token ->
+            classifierText.contains(token, ignoreCase = true)
+        }?.let { return RetryClassification(RetryKind.TRANSIENT_AX, it) }
+
+        return null
     }
 
     private fun retryClassifierText(error: Throwable): String {
@@ -452,10 +497,10 @@ class XCTestDriverClient(
             ?: "unknown"
     }
 
-    private fun axRetryDelayMs(attempt: Int): Long {
+    private fun retryDelayMs(baseMs: Long, attempt: Int): Long {
         val shift = (attempt - 1).coerceAtMost(10)
         val multiplier = 1L shl shift
-        return axRetryBaseMs * multiplier
+        return baseMs * multiplier
     }
 
     private fun requestRunnerShutdown() {
@@ -493,6 +538,17 @@ class XCTestDriverClient(
             "kAXErrorCannotComplete",
             "Error getting element frame",
             "Error getting main window"
+        )
+
+        // A blocked app main thread surfaces as one of these across the two server timeouts:
+        // the 30s testmanagerd cap ("Unable to perform work on main run loop, process main
+        // thread busy…" → 408) and the 60s XCTest watchdog ("XCTPerformOnMainRunLoop…" →
+        // 408 after the Swift-side timeout mapping), plus the XCTFuture query timeout.
+        private val RETRIABLE_APP_BUSY_TOKENS = listOf(
+            "Unable to perform work on main run loop",
+            "process main thread busy",
+            "XCTPerformOnMainRunLoop",
+            "Timed out while evaluating UI query",
         )
     }
 }

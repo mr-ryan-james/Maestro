@@ -248,6 +248,14 @@ struct ViewHierarchyHandler: HTTPHandler {
                            nsError.code == 6,
                            nsError.localizedDescription.contains("Unable to perform work on main run loop, process main thread busy for") {
                     throw AppError(type: .timeout, message: nsError.localizedDescription)
+                } else if error.localizedDescription.contains("XCTPerformOnMainRunLoop")
+                            || error.localizedDescription.range(of: "timed out", options: .caseInsensitive) != nil {
+                    // 60s XCTest watchdog ("XCTPerformOnMainRunLoop work timed out after 60.0s")
+                    // and any other main-thread-busy timeout: surface as a timeout (HTTP 408)
+                    // so the driver keeps waiting / retries, instead of an opaque internal 500
+                    // (UnknownFailure) that aborts the flow on the first blocked snapshot.
+                    NSLog("Snapshot timeout (busy main thread): \(error.localizedDescription)")
+                    throw AppError(type: .timeout, message: error.localizedDescription)
                 } else {
                     throw AppError(message: error.localizedDescription)
                 }

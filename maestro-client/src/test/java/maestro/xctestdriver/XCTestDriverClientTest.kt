@@ -10,6 +10,7 @@ import okhttp3.mockwebserver.SocketPolicy
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.Arguments
 import org.junit.jupiter.params.provider.MethodSource
 import xcuitest.XCTestClient
 import xcuitest.XCTestDriverClient
@@ -145,6 +146,36 @@ class XCTestDriverClientTest {
         }
     }
 
+    @ParameterizedTest
+    @MethodSource("provideAppBusyPayloads")
+    fun `it should retry viewHierarchy while the app main thread is busy`(statusCode: Int, errorMessage: String) {
+        // given: a blocked app main thread surfaces as either the 30s testmanagerd cap (408)
+        // or the 60s XCTest watchdog / query timeout (500). All must be treated as retriable
+        // "keep waiting" under the app-busy budget, not thrown on the first attempt.
+        val mockWebServer = MockWebServer()
+        try {
+            val mapper = jacksonObjectMapper()
+            val busyError = Error(errorMessage = errorMessage, errorCode = "timeout")
+            mockWebServer.enqueue(
+                MockResponse()
+                    .setResponseCode(statusCode)
+                    .setBody(mapper.writeValueAsString(busyError))
+            )
+            enqueueViewHierarchySuccess(mockWebServer)
+            mockWebServer.start(InetAddress.getByName("localhost"), 22087)
+
+            // when
+            val xcTestDriverClient = createDriverClient()
+            val hierarchy = xcTestDriverClient.viewHierarchy(emptySet(), excludeKeyboardElements = false)
+
+            // then
+            assertThat(hierarchy.depth).isEqualTo(1)
+            assertThat(mockWebServer.requestCount).isEqualTo(2)
+        } finally {
+            mockWebServer.shutdown()
+        }
+    }
+
     @Test
     fun `it should not retry viewHierarchy for non transient 500 payload`() {
         // given
@@ -211,6 +242,19 @@ class XCTestDriverClientTest {
     }
 
     companion object {
+
+        @JvmStatic
+        fun provideAppBusyPayloads(): List<Arguments> {
+            return listOf(
+                // 30s testmanagerd cap → 408 OperationTimeout
+                Arguments.of(408, "Unable to perform work on main run loop, process main thread busy for 30.0s"),
+                // 60s XCTest watchdog → 500 (belt-and-suspenders: classified busy even if the
+                // Swift-side .timeout remapping is absent)
+                Arguments.of(500, "XCTPerformOnMainRunLoop work timed out after 60.0s"),
+                // XCTFuture UI-query timeout
+                Arguments.of(500, "Timed out while evaluating UI query for element"),
+            )
+        }
 
         @JvmStatic
         fun provideAppCrashMessage(): Array<String> {
