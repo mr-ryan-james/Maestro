@@ -1328,10 +1328,17 @@ class Orchestra(
         timeoutMs: Long?,
         immediate: Boolean,
     ): Long {
-        return if (immediate) {
-            0L
-        } else {
-            adjustedToLatestInteraction(timeoutMs ?: effectiveOptionalLookupTimeoutMs)
+        return when {
+            immediate -> 0L
+            // An explicit condition timeout (e.g. extendedWaitUntil timeout: 15000)
+            // is honored literally — "wait up to N ms from now". It must NOT be
+            // shrunk by time-since-last-interaction: long non-interactive waits
+            // earlier in a flow (bundling splash, prior settles, nested waits)
+            // would otherwise eat the budget to 0 and turn the wait into an
+            // instant check, skipping conditional login/branch steps.
+            timeoutMs != null -> timeoutMs
+            // No explicit timeout: fall back to the interaction-adjusted default.
+            else -> adjustedToLatestInteraction(effectiveOptionalLookupTimeoutMs)
         }
     }
 
