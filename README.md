@@ -84,6 +84,7 @@ The links below will guide you through the next steps.
 
 This fork also ships a faster local-first runtime for hot sessions, minimal-query checks, and live trace visibility. If you are migrating an existing local setup, start here:
 
+- [`docs/speed-profiles.md`](./docs/speed-profiles.md) — `speedProfile: fast` flow config / `MAESTRO_SPEED_PROFILE` env for profile-scoped settle budgets, lookup timeouts, and animation disabling
 - [`docs/fast-path/README.md`](./docs/fast-path/README.md)
 - [`docs/fast-path/MIGRATION.md`](./docs/fast-path/MIGRATION.md)
 - [`docs/fast-path/OPERATIONS.md`](./docs/fast-path/OPERATIONS.md)
