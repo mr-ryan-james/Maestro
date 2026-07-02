@@ -23,6 +23,7 @@ import com.github.romankh3.image.comparison.ImageComparison
 import maestro.UiElement.Companion.toUiElementOrNull
 import maestro.device.DeviceOrientation
 import maestro.drivers.CdpWebDriver
+import maestro.settle.SpeedSettings
 import maestro.utils.FrameCache
 import maestro.utils.MaestroTimer
 import maestro.utils.ScreenshotUtils
@@ -58,11 +59,23 @@ class Maestro(
 
     private var screenRecordingInProgress = false
 
+    var speedSettings: SpeedSettings = SpeedSettings.DEFAULT
+
+    private var actionEpoch: Long = 0
+    private var settledEpoch: Long = -1
+    private var settledHierarchy: ViewHierarchy? = null
+
+    /** Any driver mutation invalidates the settled-hierarchy cache. */
+    private fun markAction() {
+        actionEpoch++
+    }
+
     fun launchApp(
         appId: String,
         launchArguments: Map<String, Any> = emptyMap(),
         stopIfRunning: Boolean = true
     ) {
+        markAction()
         LOGGER.info("Launching app $appId")
 
         if (stopIfRunning) {
@@ -73,18 +86,21 @@ class Maestro(
     }
 
     fun stopApp(appId: String) {
+        markAction()
         LOGGER.info("Stopping app $appId")
 
         driver.stopApp(appId)
     }
 
     fun killApp(appId: String) {
+        markAction()
         LOGGER.info("Killing app $appId")
 
         driver.killApp(appId)
     }
 
     fun clearAppState(appId: String) {
+        markAction()
         LOGGER.info("Clearing app state $appId")
 
         driver.clearAppState(appId)
@@ -95,12 +111,14 @@ class Maestro(
     }
 
     fun clearKeychain() {
+        markAction()
         LOGGER.info("Clearing keychain")
 
         driver.clearKeychain()
     }
 
     fun backPress() {
+        markAction()
         LOGGER.info("Pressing back")
 
         driver.backPress()
@@ -108,6 +126,7 @@ class Maestro(
     }
 
     fun hideKeyboard() {
+        markAction()
         LOGGER.info("Hiding Keyboard")
 
         driver.hideKeyboard()
@@ -126,6 +145,7 @@ class Maestro(
         duration: Long,
         waitToSettleTimeoutMs: Int? = null
     ) {
+        markAction()
         val deviceInfo = deviceInfo()
 
         when {
@@ -152,6 +172,7 @@ class Maestro(
     }
 
     fun swipe(swipeDirection: SwipeDirection, uiElement: UiElement, durationMs: Long, waitToSettleTimeoutMs: Int?) {
+        markAction()
         LOGGER.info("Swiping ${swipeDirection.name} on element: $uiElement")
         driver.swipe(uiElement.bounds.center(), swipeDirection, durationMs)
 
@@ -161,6 +182,7 @@ class Maestro(
     fun swipeFromCenter(swipeDirection: SwipeDirection, durationMs: Long, waitToSettleTimeoutMs: Int?) {
         val deviceInfo = deviceInfo()
 
+        markAction()
         LOGGER.info("Swiping ${swipeDirection.name} from center")
         val center = Point(x = deviceInfo.widthGrid / 2, y = deviceInfo.heightGrid / 2)
         driver.swipe(center, swipeDirection, durationMs)
@@ -168,6 +190,7 @@ class Maestro(
     }
 
     fun scrollVertical() {
+        markAction()
         LOGGER.info("Scrolling vertically")
 
         driver.scrollVertical()
@@ -186,7 +209,15 @@ class Maestro(
     ) {
         LOGGER.info("Tapping on element: ${tapRepeat ?: ""} $element")
 
-        val hierarchyBeforeTap = waitForAppToSettle(initialHierarchy, appId, waitToSettleTimeoutMs) ?: initialHierarchy
+        val hierarchyBeforeTap = if (
+            speedSettings.skipPreTapSettle &&
+            settledEpoch == actionEpoch
+        ) {
+            LOGGER.info("Skipping pre-tap settle: no action since last settled hierarchy")
+            initialHierarchy
+        } else {
+            waitForAppToSettle(initialHierarchy, appId, waitToSettleTimeoutMs) ?: initialHierarchy
+        }
 
         val center = (
                 hierarchyBeforeTap
@@ -298,6 +329,7 @@ class Maestro(
         tapRepeat: TapRepeat? = null,
         waitToSettleTimeoutMs: Int? = null
     ) {
+        markAction()
         LOGGER.info("Tapping at ($x, $y) using hierarchy based logic for wait")
 
         val hierarchyBeforeTap = initialHierarchy ?: viewHierarchy()
@@ -334,6 +366,7 @@ class Maestro(
         tapRepeat: TapRepeat? = null,
         waitToSettleTimeoutMs: Int? = null
     ) {
+        markAction()
         LOGGER.info("Try tapping at ($x, $y) using hierarchy based logic for wait")
 
         val hierarchyBeforeTap = initialHierarchy ?: viewHierarchy()
@@ -406,6 +439,7 @@ class Maestro(
     }
 
     fun pressKey(code: KeyCode, waitForAppToSettle: Boolean = true) {
+        markAction()
         LOGGER.info("Pressing key $code")
 
         driver.pressKey(code)
@@ -462,10 +496,20 @@ class Maestro(
         appId: String? = null,
         waitToSettleTimeoutMs: Int? = null
     ): ViewHierarchy? {
-        return driver.waitForAppToSettle(initialHierarchy, appId, waitToSettleTimeoutMs)
+        // Transition class NONE resolves to a 0 budget: skip the driver round-trip entirely.
+        if (waitToSettleTimeoutMs == 0) {
+            return initialHierarchy ?: settledHierarchy
+        }
+        val result = driver.waitForAppToSettle(initialHierarchy, appId, waitToSettleTimeoutMs)
+        settledEpoch = actionEpoch
+        if (result != null) {
+            settledHierarchy = result
+        }
+        return result
     }
 
     fun inputText(text: String, waitToSettleTimeoutMs: Int? = null) {
+        markAction()
         LOGGER.info("Inputting text: $text")
 
         driver.inputText(text)
@@ -473,6 +517,7 @@ class Maestro(
     }
 
     fun replaceText(text: String, waitToSettleTimeoutMs: Int? = null) {
+        markAction()
         LOGGER.info("Replacing text: $text")
 
         driver.replaceText(text)
@@ -480,6 +525,7 @@ class Maestro(
     }
 
     fun openLink(link: String, appId: String?, autoVerify: Boolean, browser: Boolean) {
+        markAction()
         LOGGER.info("Opening link $link for app: $appId with autoVerify config as $autoVerify")
 
         driver.openLink(link, appId, autoVerify, browser)
@@ -598,12 +644,14 @@ class Maestro(
     }
 
     fun setLocation(latitude: String, longitude: String) {
+        markAction()
         LOGGER.info("Setting location: ($latitude, $longitude)")
 
         driver.setLocation(latitude.toDouble(), longitude.toDouble())
     }
 
     fun setOrientation(orientation: DeviceOrientation, waitForAppToSettle: Boolean = true) {
+        markAction()
         LOGGER.info("Setting orientation: $orientation")
 
         driver.setOrientation(orientation)
@@ -614,6 +662,7 @@ class Maestro(
     }
 
     fun eraseText(charactersToErase: Int) {
+        markAction()
         LOGGER.info("Erasing $charactersToErase characters")
 
         driver.eraseText(charactersToErase)
