@@ -182,6 +182,14 @@ class Orchestra(
      * Explicit per-command timeout wins; the DEFAULT profile preserves driver-default
      * behavior (null); other profiles inject transition-class budgets.
      */
+    // Explicit constructor arguments act as the DEFAULT-profile baseline (MCP/CLI callers
+    // may pass their own); a non-default profile from flow config or env overrides them.
+    private val effectiveLookupTimeoutMs: Long
+        get() = if (speedProfile == SpeedProfile.DEFAULT) lookupTimeoutMs else speedSettings.lookupTimeoutMs
+
+    private val effectiveOptionalLookupTimeoutMs: Long
+        get() = if (speedProfile == SpeedProfile.DEFAULT) optionalLookupTimeoutMs else speedSettings.optionalLookupTimeoutMs
+
     private fun resolveSettleTimeout(command: Command, explicit: Int?): Int? {
         if (explicit != null) return explicit
         if (speedProfile == SpeedProfile.DEFAULT) return null
@@ -459,7 +467,7 @@ class Orchestra(
     }
 
     private fun assertConditionCommand(command: AssertConditionCommand): Boolean {
-        val timeout = (command.timeoutMs() ?: lookupTimeoutMs)
+        val timeout = (command.timeoutMs() ?: effectiveLookupTimeoutMs)
         val debugMessage = """
             Assertion '${command.condition.description()}' failed. Check the UI hierarchy in debug artifacts to verify the element state and properties.
             
@@ -1302,7 +1310,7 @@ class Orchestra(
         return if (immediate) {
             0L
         } else {
-            adjustedToLatestInteraction(timeoutMs ?: optionalLookupTimeoutMs)
+            adjustedToLatestInteraction(timeoutMs ?: effectiveOptionalLookupTimeoutMs)
         }
     }
 
@@ -1723,8 +1731,8 @@ class Orchestra(
     ): FindElementResult {
         val timeout =
             timeoutMs ?: adjustedToLatestInteraction(
-                if (optional) optionalLookupTimeoutMs
-                else lookupTimeoutMs,
+                if (optional) effectiveOptionalLookupTimeoutMs
+                else effectiveLookupTimeoutMs,
             )
 
         val (description, filterFunc) = buildFilter(selector = selector)
