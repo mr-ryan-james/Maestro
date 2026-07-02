@@ -32,7 +32,7 @@ Profile names are case-insensitive. Unknown values fall back to `default`.
 
 `default` preserves upstream Maestro timing semantics exactly — budgets and skips only engage for non-default profiles.
 
-`ferrari` currently equals `fast`. It gains event-driven quiescence (sub-frame settle detection via the in-app copilot) when the copilot ships; use it now to opt into that upgrade automatically.
+`ferrari` builds on `fast` and adds **event-driven quiescence** via an in-app copilot injected into the iOS-simulator app under test: settle waits on real render-readiness (run loop drained, layout/display epochs stable, network idle, content actually on screen, N stable frames) instead of screenshot-diffing or AX polling. This is what correctly waits out a blank-but-idle screen while a lazy Metro bundle mounts. When the copilot is absent/unreachable, `ferrari` transparently falls back to the `fast` black-box settle. See [copilot-ios.md](copilot-ios.md) for architecture, build, and how to enable (`MAESTRO_SPEED_PROFILE=ferrari` or `MAESTRO_COPILOT=1`).
 
 ## Transition classes
 

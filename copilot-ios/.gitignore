@@ -1,0 +1,3 @@
+# Build intermediates and per-arch dylibs. The shipped fat dylib is staged into
+# maestro-ios-driver/src/main/resources/copilot/ (committed there, like the runner zips).
+build/

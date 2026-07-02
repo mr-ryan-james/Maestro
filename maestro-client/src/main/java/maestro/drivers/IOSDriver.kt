@@ -81,6 +81,7 @@ class IOSDriver(
     private var appId: String? = null
     private var proxySet = false
     private val xcRunnerCLIUtils = XCRunnerCLIUtils(tempFileHandler = TempFileHandler())
+    private val quiescenceService = QuiescenceService()
 
     override fun name(): String {
         return metrics.measured("name") {
@@ -608,6 +609,16 @@ class IOSDriver(
     override fun waitForAppToSettle(initialHierarchy: ViewHierarchy?, appId: String?, timeoutMs: Int?): ViewHierarchy? {
         return metrics.measured("operation", mapOf("command" to "waitForAppToSettle", "appId" to appId.toString(), "timeoutMs" to timeoutMs.toString())) {
             val settleTimeoutMs = timeoutMs?.toLong()?.coerceAtLeast(0L) ?: SCREEN_SETTLE_TIMEOUT_MS
+
+            // Event-driven quiescence via the injected copilot, when present. It gates on
+            // real render-readiness (idle + epochs stable + network idle + content on screen
+            // + stable frames), which correctly waits out a blank-but-idle screen while a
+            // lazy bundle mounts. Returns null when the copilot is absent/unreachable, in
+            // which case we fall back to the black-box settle below.
+            if (quiescenceService.awaitQuiescence(settleTimeoutMs) != null) {
+                return@measured null
+            }
+
             LOGGER.info("Waiting for animation to end with timeout $settleTimeoutMs")
             val didFinishOnTime = waitUntilScreenIsStatic(settleTimeoutMs)
 

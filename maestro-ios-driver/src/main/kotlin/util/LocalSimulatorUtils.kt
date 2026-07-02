@@ -24,6 +24,8 @@ class LocalSimulatorUtils(private val tempFileHandler: TempFileHandler) {
 
     companion object {
         private const val LOG_DIR_DATE_FORMAT = "yyyy-MM-dd_HHmmss"
+        private const val DEFAULT_COPILOT_PORT = 7113
+        private const val COPILOT_DYLIB_RESOURCE = "/copilot/libmaestro-copilot.dylib"
     }
 
     private val homedir = System.getProperty("user.home")
@@ -337,6 +339,51 @@ class LocalSimulatorUtils(private val tempFileHandler: TempFileHandler) {
                 deviceId,
                 bundleId,
             ) + launchArguments,
+            params = copilotLaunchParams(),
+        )
+    }
+
+    // --- Copilot (event-driven quiescence) injection ---------------------------------
+    // When enabled, DYLD-inject the copilot dylib into the app under test at launch so it
+    // can report real render-readiness over a localhost socket. Off by default; opt in with
+    // MAESTRO_COPILOT=1 or the `ferrari` speed profile. Simulator only; missing dylib or a
+    // hardened target degrades to a no-op (the app launches unchanged).
+
+    private val copilotDylibPath: String? by lazy { extractCopilotDylib() }
+
+    private fun extractCopilotDylib(): String? {
+        val stream = LocalSimulatorUtils::class.java.getResourceAsStream(COPILOT_DYLIB_RESOURCE) ?: return null
+        return stream.use { input ->
+            val dir = tempFileHandler.createTempDirectory()
+            val out = File(dir, "libmaestro-copilot.dylib")
+            out.outputStream().use { input.copyTo(it) }
+            out.absolutePath
+        }
+    }
+
+    private fun copilotEnabled(): Boolean {
+        when (System.getenv("MAESTRO_COPILOT")?.lowercase()) {
+            "0", "false", "off" -> return false
+            "1", "true", "on" -> return true
+        }
+        return System.getenv("MAESTRO_SPEED_PROFILE").equals("ferrari", ignoreCase = true)
+    }
+
+    private fun copilotPort(): Int =
+        System.getenv("MAESTRO_COPILOT_PORT")?.toIntOrNull() ?: DEFAULT_COPILOT_PORT
+
+    private fun copilotLaunchParams(): Map<String, String> {
+        if (!copilotEnabled()) return emptyMap()
+        val dylib = copilotDylibPath
+        if (dylib == null) {
+            logger.warn("Copilot enabled but dylib resource $COPILOT_DYLIB_RESOURCE not found; launching without injection")
+            return emptyMap()
+        }
+        val port = copilotPort()
+        logger.info("Injecting Maestro copilot dylib at {} (MAESTRO_COPILOT_PORT={})", dylib, port)
+        return mapOf(
+            "SIMCTL_CHILD_DYLD_INSERT_LIBRARIES" to dylib,
+            "SIMCTL_CHILD_MAESTRO_COPILOT_PORT" to port.toString(),
         )
     }
 
