@@ -29,6 +29,7 @@ import com.github.romankh3.image.comparison.model.ImageComparisonState
 import io.grpc.Status
 import maestro.*
 import maestro.Filters.asFilter
+import maestro.settle.SpeedSettings
 import maestro.FindElementResult
 import maestro.Maestro
 import maestro.MaestroException
@@ -163,6 +164,34 @@ class Orchestra(
 
     private val rawCommandToMetadata = mutableMapOf<MaestroCommand, CommandMetadata>()
 
+    // Env-only resolution at construction so MAESTRO_SPEED_PROFILE applies even to
+    // flows without a config block; flow config refines it via applySpeedProfile.
+    private var speedProfile: SpeedProfile = SpeedProfile.resolve(null)
+    private var speedSettings: SpeedSettings = speedProfile.settings
+
+    private fun applySpeedProfile(config: MaestroConfig?) {
+        speedProfile = SpeedProfile.resolve(config?.ext)
+        speedSettings = speedProfile.settings
+        maestro.speedSettings = speedSettings
+        if (speedProfile != SpeedProfile.DEFAULT) {
+            logger.info("Speed profile active: $speedProfile ($speedSettings)")
+        }
+    }
+
+    /**
+     * Explicit per-command timeout wins; the DEFAULT profile preserves driver-default
+     * behavior (null); other profiles inject transition-class budgets.
+     */
+    private fun resolveSettleTimeout(command: Command, explicit: Int?): Int? {
+        if (explicit != null) return explicit
+        if (speedProfile == SpeedProfile.DEFAULT) return null
+        return when (TransitionDefaults.forCommand(command)) {
+            TransitionClass.NONE -> 0
+            TransitionClass.MINOR -> speedSettings.minorSettleBudgetMs
+            TransitionClass.SCREEN -> speedSettings.screenSettleBudgetMs
+        }
+    }
+
     suspend fun runFlow(commands: List<MaestroCommand>): Boolean {
         timeMsOfLastInteraction = System.currentTimeMillis()
 
@@ -170,6 +199,7 @@ class Orchestra(
 
         initJsEngine(config)
         initAndroidChromeDevTools(config)
+        applySpeedProfile(config)
 
         onFlowStart(commands)
 
@@ -379,7 +409,10 @@ class Orchestra(
             is DefineVariablesCommand -> defineVariablesCommand(command)
             is RunScriptCommand -> runScriptCommand(command)
             is EvalScriptCommand -> evalScriptCommand(command)
-            is ApplyConfigurationCommand -> false
+            is ApplyConfigurationCommand -> {
+                applySpeedProfile(command.config)
+                false
+            }
             is WaitForAnimationToEndCommand -> waitForAnimationToEndCommand(command)
             is TravelCommand -> travelCommand(command)
             is StartRecordingCommand -> startRecordingCommand(command)
@@ -505,7 +538,7 @@ class Orchestra(
                             retryIfNoChange = false,
                             longPress = false,
                             tapRepeat = null,
-                            waitToSettleTimeoutMs = command.waitToSettleTimeoutMs,
+                            waitToSettleTimeoutMs = resolveSettleTimeout(command, command.waitToSettleTimeoutMs),
                         )
                         return true
                     }
@@ -547,7 +580,7 @@ class Orchestra(
                 selector = fallbackSelector,
                 retryIfNoChange = false,
                 waitUntilVisible = false,
-                waitToSettleTimeoutMs = command.waitToSettleTimeoutMs,
+                waitToSettleTimeoutMs = resolveSettleTimeout(command, command.waitToSettleTimeoutMs),
                 optional = command.optional,
             ),
             retryIfNoChange = false,
@@ -972,7 +1005,7 @@ class Orchestra(
             maestro.swipeFromCenter(
                 direction,
                 durationMs = command.scrollDuration.toLong(),
-                waitToSettleTimeoutMs = command.waitToSettleTimeoutMs
+                waitToSettleTimeoutMs = resolveSettleTimeout(command, command.waitToSettleTimeoutMs)
             )
         } while (System.currentTimeMillis() < endTime)
 
@@ -1541,7 +1574,7 @@ class Orchestra(
 
         maestro.inputText(
             text = command.text,
-            waitToSettleTimeoutMs = command.waitToSettleTimeoutMs,
+            waitToSettleTimeoutMs = resolveSettleTimeout(command, command.waitToSettleTimeoutMs),
         )
 
         return true
@@ -1552,7 +1585,7 @@ class Orchestra(
 
         maestro.replaceText(
             text = command.text,
-            waitToSettleTimeoutMs = command.waitToSettleTimeoutMs,
+            waitToSettleTimeoutMs = resolveSettleTimeout(command, command.waitToSettleTimeoutMs),
         )
 
         return true
@@ -1573,7 +1606,7 @@ class Orchestra(
         inputTextCommand(
             InputTextCommand(
                 text = command.genRandomString(),
-                waitToSettleTimeoutMs = command.waitToSettleTimeoutMs,
+                waitToSettleTimeoutMs = resolveSettleTimeout(command, command.waitToSettleTimeoutMs),
             )
         )
 
@@ -1606,7 +1639,7 @@ class Orchestra(
                 retryIfNoChange = retryIfNoChange,
                 longPress = command.longPress ?: false,
                 tapRepeat = command.repeat,
-                waitToSettleTimeoutMs = command.waitToSettleTimeoutMs,
+                waitToSettleTimeoutMs = resolveSettleTimeout(command, command.waitToSettleTimeoutMs),
             )
         } else {
             // Default behavior: tap at element center
@@ -1618,7 +1651,7 @@ class Orchestra(
                 longPress = command.longPress ?: false,
                 appId = config?.appId,
                 tapRepeat = command.repeat,
-                waitToSettleTimeoutMs = command.waitToSettleTimeoutMs,
+                waitToSettleTimeoutMs = resolveSettleTimeout(command, command.waitToSettleTimeoutMs),
             )
         }
 
@@ -1661,7 +1694,7 @@ class Orchestra(
                 retryIfNoChange = command.retryIfNoChange ?: false,
                 longPress = command.longPress ?: false,
                 tapRepeat = command.repeat,
-                waitToSettleTimeoutMs = command.waitToSettleTimeoutMs
+                waitToSettleTimeoutMs = resolveSettleTimeout(command, command.waitToSettleTimeoutMs)
             )
         } else {
             val (x, y) = point.split(",")
@@ -1675,7 +1708,7 @@ class Orchestra(
                 retryIfNoChange = command.retryIfNoChange ?: false,
                 longPress = command.longPress ?: false,
                 tapRepeat = command.repeat,
-                waitToSettleTimeoutMs = command.waitToSettleTimeoutMs
+                waitToSettleTimeoutMs = resolveSettleTimeout(command, command.waitToSettleTimeoutMs)
             )
         }
 
@@ -2056,7 +2089,7 @@ class Orchestra(
                     direction,
                     uiElement.element,
                     command.duration,
-                    waitToSettleTimeoutMs = command.waitToSettleTimeoutMs
+                    waitToSettleTimeoutMs = resolveSettleTimeout(command, command.waitToSettleTimeoutMs)
                 )
             }
 
@@ -2065,21 +2098,21 @@ class Orchestra(
                     startRelative = startRelative,
                     endRelative = endRelative,
                     duration = command.duration,
-                    waitToSettleTimeoutMs = command.waitToSettleTimeoutMs
+                    waitToSettleTimeoutMs = resolveSettleTimeout(command, command.waitToSettleTimeoutMs)
                 )
             }
 
             direction != null -> maestro.swipe(
                 swipeDirection = direction,
                 duration = command.duration,
-                waitToSettleTimeoutMs = command.waitToSettleTimeoutMs
+                waitToSettleTimeoutMs = resolveSettleTimeout(command, command.waitToSettleTimeoutMs)
             )
 
             start != null && end != null -> maestro.swipe(
                 startPoint = start,
                 endPoint = end,
                 duration = command.duration,
-                waitToSettleTimeoutMs = command.waitToSettleTimeoutMs
+                waitToSettleTimeoutMs = resolveSettleTimeout(command, command.waitToSettleTimeoutMs)
             )
 
             else -> error("Illegal arguments for swiping")
