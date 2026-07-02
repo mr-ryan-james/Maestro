@@ -380,6 +380,8 @@ class Orchestra(
 
         flowController.waitIfPaused()
 
+        val commandStartMs = System.currentTimeMillis()
+        try {
         return when (command) {
             is TapOnElementCommand -> {
                 tapOnElement(
@@ -446,6 +448,13 @@ class Orchestra(
             if (mutating) {
                 timeMsOfLastInteraction = System.currentTimeMillis()
             }
+        }
+        } finally {
+            // Success and failure both record how long the command took.
+            updateMetadata(
+                maestroCommand,
+                getMetadata(maestroCommand).copy(durationMs = System.currentTimeMillis() - commandStartMs),
+            )
         }
     }
 
@@ -2222,7 +2231,8 @@ class Orchestra(
         val logMessages: List<String> = emptyList(),
         val insight: Insight = Insight("", Insight.Level.NONE),
         val aiReasoning: String? = null,
-        val labeledCommand: String? = null
+        val labeledCommand: String? = null,
+        val durationMs: Long? = null,
     )
 
     enum class ErrorResolution {
