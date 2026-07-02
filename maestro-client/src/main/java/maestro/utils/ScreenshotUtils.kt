@@ -138,26 +138,39 @@ class ScreenshotUtils {
             return latestHierarchy
         }
 
-        fun waitUntilScreenIsStatic(timeoutMs: Long, threshold: Double, driver: Driver): Boolean {
-            return MaestroTimer.retryUntilTrue(timeoutMs) {
-                val startScreenshot: BufferedImage? = tryTakingScreenshot(driver)
-                val endScreenshot: BufferedImage? = tryTakingScreenshot(driver)
+        fun waitUntilScreenIsStatic(
+            timeoutMs: Long,
+            threshold: Double,
+            driver: Driver,
+            frameCache: FrameCache? = null,
+        ): Boolean {
+            val endTime = System.currentTimeMillis() + timeoutMs
+            var previous: BufferedImage? = frameCache?.lastFrame
+            var attempt = 0
 
-                if (startScreenshot != null &&
-                    endScreenshot != null &&
-                    startScreenshot.width == endScreenshot.width &&
-                    startScreenshot.height == endScreenshot.height
-                ) {
-                    val imageDiff = ImageComparison(
-                        startScreenshot,
-                        endScreenshot
-                    ).compareImages().differencePercent
+            do {
+                val current = tryTakingScreenshot(driver)
+                    ?: return false
 
-                    return@retryUntilTrue imageDiff <= threshold
+                val prev = previous
+                if (prev != null && prev.width == current.width && prev.height == current.height) {
+                    val diff = ImageComparison(prev, current).compareImages().differencePercent
+                    if (diff <= threshold) {
+                        frameCache?.update(current)
+                        return true
+                    }
                 }
+                previous = current
+                frameCache?.update(current)
 
-                return@retryUntilTrue false
-            }
+                val delay = MaestroTimer.DEFAULT_BACKOFF_MS.getOrElse(attempt) { MaestroTimer.DEFAULT_BACKOFF_MS.last() }
+                attempt++
+                if (System.currentTimeMillis() + delay < endTime) {
+                    MaestroTimer.sleep(MaestroTimer.Reason.BUFFER, delay)
+                }
+            } while (System.currentTimeMillis() < endTime)
+
+            return false
         }
 
         private fun viewHierarchy(driver: Driver): ViewHierarchy {

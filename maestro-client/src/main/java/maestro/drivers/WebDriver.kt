@@ -13,6 +13,7 @@ import maestro.SwipeDirection
 import maestro.TreeNode
 import maestro.ViewHierarchy
 import maestro.device.Platform
+import maestro.utils.FrameCache
 import maestro.utils.ScreenshotUtils
 import maestro.web.record.JcodecVideoEncoder
 import maestro.web.record.WebScreenRecorder
@@ -559,8 +560,10 @@ class WebDriver(
         return ScreenshotUtils.waitForAppToSettle(initialHierarchy, this)
     }
 
+    private val frameCache = FrameCache()
+
     override fun waitUntilScreenIsStatic(timeoutMs: Long): Boolean {
-        return ScreenshotUtils.waitUntilScreenIsStatic(timeoutMs, SCREENSHOT_DIFF_THRESHOLD, this)
+        return ScreenshotUtils.waitUntilScreenIsStatic(timeoutMs, SCREENSHOT_DIFF_THRESHOLD, this, frameCache)
     }
 
     override fun capabilities(): List<Capability> {

@@ -23,6 +23,7 @@ import com.github.romankh3.image.comparison.ImageComparison
 import maestro.UiElement.Companion.toUiElementOrNull
 import maestro.device.DeviceOrientation
 import maestro.drivers.CdpWebDriver
+import maestro.utils.FrameCache
 import maestro.utils.MaestroTimer
 import maestro.utils.ScreenshotUtils
 import maestro.utils.SocketUtils
@@ -618,12 +619,14 @@ class Maestro(
         driver.eraseText(charactersToErase)
     }
 
+    private val animationFrameCache = FrameCache()
+
     fun waitForAnimationToEnd(timeout: Long?) {
         @Suppress("NAME_SHADOWING")
         val timeout = timeout ?: ANIMATION_TIMEOUT_MS
         LOGGER.info("Waiting for animation to end with timeout $timeout")
 
-        ScreenshotUtils.waitUntilScreenIsStatic(timeout, SCREENSHOT_DIFF_THRESHOLD, driver)
+        ScreenshotUtils.waitUntilScreenIsStatic(timeout, SCREENSHOT_DIFF_THRESHOLD, driver, animationFrameCache)
     }
 
     fun setProxy(
