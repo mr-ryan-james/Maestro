@@ -8,8 +8,19 @@ import UIKit
 /// (and, once implemented, the socket server) onto the main queue.
 @_cdecl("maestro_copilot_start")
 public func maestro_copilot_start() {
-    NSLog("[maestro-copilot] hello — dylib loaded (v1)")
     let env = ProcessInfo.processInfo.environment
+    let bundleId = Bundle.main.bundleIdentifier ?? "<nil>"
+
+    // When injected globally at the simulator's launchd level (so a dev-client deep-link
+    // relaunch is also covered), the dylib loads into every process — springboard, system
+    // daemons, the app. Only activate for the target app; otherwise multiple processes would
+    // fight over the socket port. MAESTRO_COPILOT_APP_ID unset ⇒ activate anywhere (the
+    // per-launch SIMCTL_CHILD injection path, which only reaches the target app anyway).
+    if let targetAppId = env["MAESTRO_COPILOT_APP_ID"], !targetAppId.isEmpty, targetAppId != bundleId {
+        return
+    }
+
+    NSLog("[maestro-copilot] hello — dylib loaded (v1) in \(bundleId)")
     let port = env["MAESTRO_COPILOT_PORT"]
     NSLog("[maestro-copilot] MAESTRO_COPILOT_PORT=\(port ?? "<unset>")")
 

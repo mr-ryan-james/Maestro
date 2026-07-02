@@ -56,17 +56,30 @@ Off by default. Opt in per run:
 - `MAESTRO_COPILOT=1` (any profile). `MAESTRO_COPILOT=0` force-disables.
 - `MAESTRO_COPILOT_PORT` overrides the socket port (default `7113`).
 
-At launch, `LocalSimulatorUtils.launch()` DYLD-injects the dylib via
-`SIMCTL_CHILD_DYLD_INSERT_LIBRARIES` and passes `SIMCTL_CHILD_MAESTRO_COPILOT_PORT`. The driver's
-`QuiescenceService` then consults the copilot in `waitForAppToSettle`; if the copilot is absent or
-unreachable it returns null and the existing black-box settle runs unchanged. Missing dylib or a
-hardened target degrades to a no-op.
+`LocalSimulatorUtils.launch()` injects the dylib two ways when enabled:
 
-## Known limitation: Expo dev-client deep-link relaunch
+1. **Per-launch** — `SIMCTL_CHILD_DYLD_INSERT_LIBRARIES` + `SIMCTL_CHILD_MAESTRO_COPILOT_PORT` on
+   the `simctl launch`.
+2. **Sim-wide** — `simctl spawn <udid> launchctl setenv DYLD_INSERT_LIBRARIES <dylib>` (plus
+   `MAESTRO_COPILOT_PORT` / `MAESTRO_COPILOT_APP_ID`), so apps launched by other means (an Expo
+   dev-client `openurl` deep-link relaunch) inherit the injection too. The gate env is set before
+   `DYLD_INSERT_LIBRARIES` so transient system/`launchctl` processes load the dylib with the gate
+   already in place and no-op immediately. A non-copilot run clears the sim-wide env (self-healing).
 
-DYLD injection applies to `simctl launch`. Expo dev-client flows commonly launch the app, stop it,
-then relaunch via a `simctl openurl` deep link (`exp+…://…?url=<metro>`) — and `openurl` does not
-carry `SIMCTL_CHILD_*` env, so the copilot is not injected into the deep-link-launched instance.
-For the copilot to help those flows, inject on the instance that actually runs the app (launch it
-with the Metro URL as a launch argument instead of a post-launch `openurl`), or run against a
-production / `expo export` bundle. This All Gravy integration is tracked as Phase 2 Task 5.
+The dylib self-gates on `MAESTRO_COPILOT_APP_ID`: it loads into every process but only activates
+(installs trackers + binds the socket) in the target bundle, so springboard/system daemons never
+clash for the port. The dylib is extracted to a stable path (`~/.maestro/copilot/`) so the
+sim-wide env never dangles at a deleted file.
+
+The driver's `QuiescenceService` consults the copilot in `waitForAppToSettle`; if the copilot is
+absent or unreachable it returns null and the existing black-box settle runs unchanged. Missing
+dylib or a hardened target degrades to a no-op.
+
+## Residual: dev-client network noise
+
+On a dev-client build, Metro keeps persistent connections open; short-lived poll requests can keep
+`activeNetworkRequests > 0` and hold quiescence at `WAITING_FOR_ASYNC_IDLE`. Websockets and
+requests older than 10s are already excluded. For the cleanest signal run against a production /
+`expo export` bundle (no Metro, no lazy bundling); the copilot then settles purely on render
+epochs + content + stable frames. A future refinement can gate on the app's own readiness signal
+(e.g. the `e2eIdentifierProxyHost` proxy population) to ignore dev-server traffic entirely.

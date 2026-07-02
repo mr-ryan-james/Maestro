@@ -331,6 +331,10 @@ class LocalSimulatorUtils(private val tempFileHandler: TempFileHandler) {
         bundleId: String,
         launchArguments: List<String> = emptyList(),
     ) {
+        // Sim-level injection so a subsequent dev-client deep-link relaunch (simctl openurl,
+        // which does not carry SIMCTL_CHILD_* env) is also covered. Self-healing: a non-copilot
+        // run clears any stale env left over from a prior session.
+        applyCopilotSimEnv(deviceId, bundleId)
         runCommand(
             listOf(
                 "xcrun",
@@ -344,21 +348,27 @@ class LocalSimulatorUtils(private val tempFileHandler: TempFileHandler) {
     }
 
     // --- Copilot (event-driven quiescence) injection ---------------------------------
-    // When enabled, DYLD-inject the copilot dylib into the app under test at launch so it
-    // can report real render-readiness over a localhost socket. Off by default; opt in with
+    // When enabled, DYLD-inject the copilot dylib into the app under test so it can report
+    // real render-readiness over a localhost socket. Off by default; opt in with
     // MAESTRO_COPILOT=1 or the `ferrari` speed profile. Simulator only; missing dylib or a
     // hardened target degrades to a no-op (the app launches unchanged).
+    //
+    // Two injection paths, both active when enabled:
+    //   1) per-launch SIMCTL_CHILD_DYLD_INSERT_LIBRARIES on this `simctl launch` (below), and
+    //   2) sim-wide `launchctl setenv DYLD_INSERT_LIBRARIES` so apps launched by other means
+    //      (Expo dev-client deep links) inherit it too. The dylib self-gates on
+    //      MAESTRO_COPILOT_APP_ID so only the target app activates (no springboard socket clash).
 
     private val copilotDylibPath: String? by lazy { extractCopilotDylib() }
 
     private fun extractCopilotDylib(): String? {
         val stream = LocalSimulatorUtils::class.java.getResourceAsStream(COPILOT_DYLIB_RESOURCE) ?: return null
-        return stream.use { input ->
-            val dir = tempFileHandler.createTempDirectory()
-            val out = File(dir, "libmaestro-copilot.dylib")
-            out.outputStream().use { input.copyTo(it) }
-            out.absolutePath
-        }
+        // Extract to a stable path (not a per-run temp dir) so the sim-wide launchd env never
+        // dangles at a deleted file after the session ends.
+        val dir = File(homedir, ".maestro/copilot").apply { mkdirs() }
+        val out = File(dir, "libmaestro-copilot.dylib")
+        stream.use { input -> out.outputStream().use { input.copyTo(it) } }
+        return out.absolutePath
     }
 
     private fun copilotEnabled(): Boolean {
@@ -374,8 +384,7 @@ class LocalSimulatorUtils(private val tempFileHandler: TempFileHandler) {
 
     private fun copilotLaunchParams(): Map<String, String> {
         if (!copilotEnabled()) return emptyMap()
-        val dylib = copilotDylibPath
-        if (dylib == null) {
+        val dylib = copilotDylibPath ?: run {
             logger.warn("Copilot enabled but dylib resource $COPILOT_DYLIB_RESOURCE not found; launching without injection")
             return emptyMap()
         }
@@ -385,6 +394,33 @@ class LocalSimulatorUtils(private val tempFileHandler: TempFileHandler) {
             "SIMCTL_CHILD_DYLD_INSERT_LIBRARIES" to dylib,
             "SIMCTL_CHILD_MAESTRO_COPILOT_PORT" to port.toString(),
         )
+    }
+
+    private fun applyCopilotSimEnv(deviceId: String, bundleId: String) {
+        val dylib = if (copilotEnabled()) copilotDylibPath else null
+        runCatching {
+            if (dylib != null) {
+                // Set the gate (app id + port) BEFORE enabling injection, so any process the
+                // subsequent setenv spawns loads the dylib with the gate already in place and
+                // no-ops instead of racing for the socket.
+                setSimLaunchdEnv(deviceId, "MAESTRO_COPILOT_APP_ID", bundleId)
+                setSimLaunchdEnv(deviceId, "MAESTRO_COPILOT_PORT", copilotPort().toString())
+                setSimLaunchdEnv(deviceId, "DYLD_INSERT_LIBRARIES", dylib)
+                logger.info("Copilot: sim-wide launchd injection set (app={}, port={})", bundleId, copilotPort())
+            } else {
+                // Proactively clear so a prior session's sim-wide injection doesn't leak in.
+                unsetSimLaunchdEnv(deviceId, "DYLD_INSERT_LIBRARIES")
+                unsetSimLaunchdEnv(deviceId, "MAESTRO_COPILOT_APP_ID")
+            }
+        }.onFailure { logger.debug("Copilot: sim launchd env update skipped: {}", it.message) }
+    }
+
+    private fun setSimLaunchdEnv(deviceId: String, key: String, value: String) {
+        runCommand(listOf("xcrun", "simctl", "spawn", deviceId, "launchctl", "setenv", key, value))
+    }
+
+    private fun unsetSimLaunchdEnv(deviceId: String, key: String) {
+        runCommand(listOf("xcrun", "simctl", "spawn", deviceId, "launchctl", "unsetenv", key))
     }
 
     fun launchUITestRunner(
