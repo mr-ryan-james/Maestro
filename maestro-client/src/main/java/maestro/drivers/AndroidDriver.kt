@@ -334,7 +334,6 @@ class AndroidDriver(
             }
 
             dadb.shell("input keyevent $intCode")
-            Thread.sleep(300)
         }
     }
 
@@ -527,14 +526,12 @@ class AndroidDriver(
     override fun backPress() {
         metrics.measured("operation", mapOf("command" to "backPress")) {
             dadb.shell("input keyevent 4")
-            Thread.sleep(300)
         }
     }
 
     override fun hideKeyboard() {
         metrics.measured("operation", mapOf("command" to "hideKeyboard")) {
             dadb.shell("input keyevent 4") // 'Back', which dismisses the keyboard before handing over to navigation
-            Thread.sleep(300)
             waitForAppToSettle(null, null)
         }
     }
