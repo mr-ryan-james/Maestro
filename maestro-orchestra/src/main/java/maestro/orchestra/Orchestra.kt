@@ -169,12 +169,19 @@ class Orchestra(
     private var speedProfile: SpeedProfile = SpeedProfile.resolve(null)
     private var speedSettings: SpeedSettings = speedProfile.settings
 
+    private var animationsDisabled = false
+
     private fun applySpeedProfile(config: MaestroConfig?) {
         speedProfile = SpeedProfile.resolve(config?.ext)
         speedSettings = speedProfile.settings
         maestro.speedSettings = speedSettings
         if (speedProfile != SpeedProfile.DEFAULT) {
             logger.info("Speed profile active: $speedProfile ($speedSettings)")
+        }
+        if (speedSettings.disableAnimations && !animationsDisabled) {
+            runCatching { maestro.setAnimations(false) }
+                .onFailure { logger.warn("Failed to disable animations", it) }
+            animationsDisabled = true
         }
     }
 
@@ -246,6 +253,11 @@ class Orchestra(
                     shouldReinitJsEngine = false,
                 )
             } ?: true
+
+            if (animationsDisabled) {
+                runCatching { maestro.setAnimations(true) }
+                animationsDisabled = false
+            }
 
             jsEngine.close()
 

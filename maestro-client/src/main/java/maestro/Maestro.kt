@@ -709,6 +709,11 @@ class Maestro(
         driver.setAirplaneMode(enabled)
     }
 
+    fun setAnimations(enabled: Boolean) {
+        LOGGER.info("Setting animations enabled=$enabled")
+        driver.setAnimations(enabled)
+    }
+
     fun setAndroidChromeDevToolsEnabled(enabled: Boolean) {
         driver.setAndroidChromeDevToolsEnabled(enabled)
     }

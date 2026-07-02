@@ -113,6 +113,9 @@ interface Driver {
 
     fun setAndroidChromeDevToolsEnabled(enabled: Boolean) = Unit
 
+    /** Disable or restore OS-level animations for the session. No-op where unsupported. */
+    fun setAnimations(enabled: Boolean) {}
+
     fun queryOnDeviceElements(query: OnDeviceElementQuery): List<TreeNode> {
         return listOf()
     }

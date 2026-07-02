@@ -173,6 +173,9 @@ class AndroidDriver(
     }
 
     override fun close() {
+        if (savedAnimationScales != null) {
+            runCatching { setAnimations(true) }
+        }
         if (proxySet) {
             resetProxy()
         }
@@ -745,6 +748,37 @@ class AndroidDriver(
         metrics.measured("operation", mapOf("command" to "resetProxy")) {
             shell("settings put global http_proxy :0")
         }
+    }
+
+    private var savedAnimationScales: Triple<String, String, String>? = null
+
+    override fun setAnimations(enabled: Boolean) {
+        metrics.measured("operation", mapOf("command" to "setAnimations", "enabled" to enabled.toString())) {
+            if (!enabled) {
+                if (savedAnimationScales == null) {
+                    savedAnimationScales = Triple(
+                        normalizeScale(shell("settings get global window_animation_scale")),
+                        normalizeScale(shell("settings get global transition_animation_scale")),
+                        normalizeScale(shell("settings get global animator_duration_scale")),
+                    )
+                }
+                shell("settings put global window_animation_scale 0")
+                shell("settings put global transition_animation_scale 0")
+                shell("settings put global animator_duration_scale 0")
+            } else {
+                savedAnimationScales?.let { (window, transition, animator) ->
+                    shell("settings put global window_animation_scale $window")
+                    shell("settings put global transition_animation_scale $transition")
+                    shell("settings put global animator_duration_scale $animator")
+                }
+                savedAnimationScales = null
+            }
+        }
+    }
+
+    private fun normalizeScale(raw: String): String {
+        val value = raw.trim()
+        return if (value.isBlank() || value == "null") "1" else value
     }
 
     override fun isShutdown(): Boolean {
