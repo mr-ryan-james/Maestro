@@ -9,14 +9,26 @@ object MaestroTimer {
         this.sleep = sleep
     }
 
-    fun <T> withTimeout(timeoutMs: Long, block: () -> T?): T? {
+    val DEFAULT_BACKOFF_MS: List<Long> = listOf(16L, 50L, 100L)
+
+    fun <T> withTimeout(
+        timeoutMs: Long,
+        backoffMs: List<Long> = DEFAULT_BACKOFF_MS,
+        block: () -> T?,
+    ): T? {
         val endTime = System.currentTimeMillis() + timeoutMs
+        var attempt = 0
 
         do {
             val result = block()
 
             if (result != null) {
                 return result
+            }
+            val delay = backoffMs.getOrElse(attempt) { backoffMs.last() }
+            attempt++
+            if (System.currentTimeMillis() + delay < endTime) {
+                sleep(Reason.BUFFER, delay)
             }
         } while (System.currentTimeMillis() < endTime)
 
@@ -30,16 +42,20 @@ object MaestroTimer {
         block: () -> Boolean,
     ): Boolean {
         val endTime = System.currentTimeMillis() + timeoutMs
+        var attempt = 0
+
         do {
             try {
-                delayMs?.let {
-                    sleep(Reason.BUFFER, delayMs)
-                }
                 if (block()) {
                     return true
                 }
             } catch (ignored: Exception) {
                 onException(ignored)
+            }
+            val delay = delayMs ?: DEFAULT_BACKOFF_MS.getOrElse(attempt) { DEFAULT_BACKOFF_MS.last() }
+            attempt++
+            if (System.currentTimeMillis() + delay < endTime) {
+                sleep(Reason.BUFFER, delay)
             }
         } while (System.currentTimeMillis() < endTime)
 
