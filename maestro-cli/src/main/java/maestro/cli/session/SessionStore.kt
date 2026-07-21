@@ -3,79 +3,132 @@ package maestro.cli.session
 import maestro.cli.db.KeyValueStore
 import maestro.device.Platform
 import java.nio.file.Paths
+import java.nio.charset.StandardCharsets
+import java.util.Base64
 import java.util.concurrent.TimeUnit
 
 class SessionStore(private val keyValueStore: KeyValueStore) {
 
-    fun heartbeat(sessionId: String, platform: Platform, deviceId: String) {
-        synchronized(keyValueStore) {
-            keyValueStore.set(
-                key = key(sessionId, platform, deviceId),
-                value = System.currentTimeMillis().toString(),
-            )
+    data class LeaseAcquisition(
+        val acquired: Boolean,
+        val conflictingDriverHostPort: Int? = null,
+    )
 
-            pruneInactiveSessions()
+    fun acquire(
+        sessionId: String,
+        platform: Platform,
+        deviceId: String,
+        driverHostPort: Int,
+    ): LeaseAcquisition {
+        val now = System.currentTimeMillis()
+        val currentKey = key(sessionId, platform, deviceId, driverHostPort)
+        val devicePrefix = devicePrefix(platform, deviceId)
+        return keyValueStore.update { database ->
+            pruneInactiveSessions(database, now)
+            val conflict = database.keys.firstOrNull {
+                (it.startsWith(devicePrefix) && it != currentKey) || isLegacyKey(it, platform)
+            }
+            if (conflict != null) {
+                LeaseAcquisition(
+                    acquired = false,
+                    conflictingDriverHostPort = if (conflict.startsWith(devicePrefix)) {
+                        driverHostPort(conflict, devicePrefix)
+                    } else {
+                        null
+                    },
+                )
+            } else {
+                database[currentKey] = now.toString()
+                LeaseAcquisition(acquired = true)
+            }
         }
     }
 
-    private fun pruneInactiveSessions() {
-        keyValueStore.keys()
-            .forEach { key ->
-                val lastHeartbeat = keyValueStore.get(key)?.toLongOrNull()
-                if (lastHeartbeat != null && System.currentTimeMillis() - lastHeartbeat >= TimeUnit.SECONDS.toMillis(21)) {
-                    keyValueStore.delete(key)
-                }
+    fun heartbeat(
+        sessionId: String,
+        platform: Platform,
+        deviceId: String,
+        driverHostPort: Int,
+    ): Boolean {
+        val now = System.currentTimeMillis()
+        val currentKey = key(sessionId, platform, deviceId, driverHostPort)
+        val devicePrefix = devicePrefix(platform, deviceId)
+        return keyValueStore.update { database ->
+            pruneInactiveSessions(database, now)
+            val conflictExists = database.keys.any {
+                (it.startsWith(devicePrefix) && it != currentKey) || isLegacyKey(it, platform)
             }
+            if (currentKey !in database || conflictExists) {
+                false
+            } else {
+                database[currentKey] = now.toString()
+                true
+            }
+        }
     }
 
-    fun delete(sessionId: String, platform: Platform, deviceId: String) {
-        synchronized(keyValueStore) {
-            keyValueStore.delete(
-                key(sessionId, platform, deviceId)
-            )
+    fun release(
+        sessionId: String,
+        platform: Platform,
+        deviceId: String,
+        driverHostPort: Int,
+    ) {
+        keyValueStore.update { database ->
+            database.remove(key(sessionId, platform, deviceId, driverHostPort))
         }
     }
 
     fun activeSessions(): List<String> {
-        synchronized(keyValueStore) {
-            return keyValueStore
-                .keys()
-                .filter { key ->
-                    val lastHeartbeat = keyValueStore.get(key)?.toLongOrNull()
-                    lastHeartbeat != null && System.currentTimeMillis() - lastHeartbeat < TimeUnit.SECONDS.toMillis(21)
-                }
-        }
-    }
-
-    fun shouldCloseSession(platform: Platform, deviceId: String): Boolean {
-        return activeSessionsForDevice(platform, deviceId).isEmpty()
+        val now = System.currentTimeMillis()
+        return keyValueStore.entries()
+            .filter { (_, value) ->
+                val lastHeartbeat = value.toLongOrNull()
+                lastHeartbeat != null && now - lastHeartbeat < SESSION_TIMEOUT_MS
+            }
+            .keys
+            .toList()
     }
 
     fun activeSessionsForDevice(platform: Platform, deviceId: String): List<String> {
-        val devicePrefix = "${platform}_${deviceId}_"
-        synchronized(keyValueStore) {
-            return activeSessions().filter { it.startsWith(devicePrefix) }
+        val prefix = devicePrefix(platform, deviceId)
+        return activeSessions().filter { it.startsWith(prefix) }
+    }
+
+    private fun pruneInactiveSessions(database: MutableMap<String, String>, now: Long) {
+        database.entries.removeIf { (_, value) ->
+            val lastHeartbeat = value.toLongOrNull()
+            lastHeartbeat == null || now - lastHeartbeat >= SESSION_TIMEOUT_MS
         }
     }
 
-    fun hasActiveSessionForDevice(
+    private fun driverHostPort(key: String, devicePrefix: String): Int? {
+        return key.removePrefix(devicePrefix).substringBefore('_').toIntOrNull()
+    }
+
+    private fun devicePrefix(platform: Platform, deviceId: String): String {
+        val encodedDeviceId = Base64.getUrlEncoder()
+            .withoutPadding()
+            .encodeToString(deviceId.toByteArray(StandardCharsets.UTF_8))
+        return "${KEY_VERSION}_${platform}_${encodedDeviceId}_"
+    }
+
+    private fun isLegacyKey(key: String, platform: Platform): Boolean {
+        return !key.startsWith("${KEY_VERSION}_") && key.startsWith("${platform}_")
+    }
+
+    private fun key(
         sessionId: String,
         platform: Platform,
         deviceId: String,
-    ): Boolean {
-        val currentKey = key(sessionId, platform, deviceId)
-        val devicePrefix = "${platform}_${deviceId}_"
-        synchronized(keyValueStore) {
-            return activeSessions()
-                .any { it.startsWith(devicePrefix) && it != currentKey }
-        }
-    }
-
-    private fun key(sessionId: String, platform: Platform, deviceId: String): String {
-        return "${platform}_${deviceId}_$sessionId"
+        driverHostPort: Int,
+    ): String {
+        return "${devicePrefix(platform, deviceId)}${driverHostPort}_$sessionId"
     }
 
     companion object {
+        private const val KEY_VERSION = "v2"
+        private val SESSION_TIMEOUT_MS = TimeUnit.SECONDS.toMillis(21)
+
         val default by lazy {
             SessionStore(
                 KeyValueStore(

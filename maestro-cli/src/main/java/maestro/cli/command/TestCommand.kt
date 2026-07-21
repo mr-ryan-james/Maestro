@@ -478,6 +478,7 @@ class TestCommand : Callable<Int> {
                 runShardSuite(
                     effectiveShards = effectiveShards,
                     deviceIds = deviceIds,
+                    devicePlatforms = connectedDevices.associate { it.instanceId to it.platform },
                     shardIndex = shardIndex,
                     chunkPlans = chunkPlans,
                     debugOutputPath = debugOutputPath,
@@ -505,13 +506,17 @@ class TestCommand : Callable<Int> {
     private fun runShardSuite(
         effectiveShards: Int,
         deviceIds: List<String>,
+        devicePlatforms: Map<String, Platform>,
         shardIndex: Int,
         chunkPlans: List<ExecutionPlan>,
         debugOutputPath: Path,
         testOutputDir: Path?,
     ): Triple<Int?, Int?, TestExecutionSummary?> {
-        val driverHostPort = selectPort(effectiveShards)
         val deviceId = deviceIds[shardIndex]
+        val devicePlatform = checkNotNull(devicePlatforms[deviceId]) {
+            "Connected device $deviceId has no platform"
+        }
+        val driverHostPort = selectPort(effectiveShards, devicePlatform)
         val executionPlan = chunkPlans[shardIndex]
 
         logger.info("[shard ${shardIndex + 1}] Selected device $deviceId using port $driverHostPort with execution plan $executionPlan")
@@ -575,7 +580,7 @@ class TestCommand : Callable<Int> {
         }
     }
 
-    private fun selectPort(effectiveShards: Int): Int {
+    private fun selectPort(effectiveShards: Int, platform: Platform): Int {
         // If user specified driver host port via CLI, use it
         parent?.driverHostPort?.let { port ->
             if (effectiveShards > 1) {
@@ -584,7 +589,7 @@ class TestCommand : Callable<Int> {
                         "Each shard requires a unique driver host port."
                 )
             }
-            if (!isPortAvailable(port)) {
+            if (!isDriverPortAvailable(port, platform)) {
                 throw CliError("Port $port is already in use. Please specify a different port with --driver-host-port")
             }
             return port
@@ -592,15 +597,23 @@ class TestCommand : Callable<Int> {
 
         // Otherwise use default behavior
         if (effectiveShards == 1) {
-            if (!isPortAvailable(7001)) {
+            if (!isDriverPortAvailable(7001, platform)) {
                 throw CliError("Default port 7001 is already in use. Use --driver-host-port to specify a different port")
             }
             return 7001
         }
 
         return (7001..7128).shuffled().find { port ->
-            usedPorts.putIfAbsent(port, true) == null && isPortAvailable(port)
+            usedPorts.putIfAbsent(port, true) == null && isDriverPortAvailable(port, platform)
         } ?: error("No available ports found")
+    }
+
+    internal fun isDriverPortAvailable(
+        port: Int,
+        platform: Platform,
+        hostPortAvailability: (Int) -> Boolean = ::isPortAvailable,
+    ): Boolean {
+        return platform == Platform.ANDROID || hostPortAvailability(port)
     }
 
     private fun runSingleFlow(

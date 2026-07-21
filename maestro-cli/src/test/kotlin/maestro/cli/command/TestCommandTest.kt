@@ -1,6 +1,7 @@
 package maestro.cli.command
 
 import com.google.common.truth.Truth.assertThat
+import maestro.device.Platform
 import maestro.orchestra.workspace.WorkspaceExecutionPlanner
 import maestro.orchestra.WorkspaceConfig
 import org.junit.jupiter.api.Test
@@ -172,6 +173,32 @@ class TestCommandTest {
         )
         val result = testCommand.executionPlanIncludesWebFlow(executionPlan)
         assertThat(result).isFalse()
+    }
+
+    @Test
+    fun `Android driver ports do not require a free host socket`() {
+        var hostChecks = 0
+
+        val available = testCommand.isDriverPortAvailable(7001, Platform.ANDROID) {
+            hostChecks += 1
+            false
+        }
+
+        assertThat(available).isTrue()
+        assertThat(hostChecks).isEqualTo(0)
+    }
+
+    @Test
+    fun `iOS driver ports still require a free host socket`() {
+        var hostChecks = 0
+
+        val available = testCommand.isDriverPortAvailable(22087, Platform.IOS) {
+            hostChecks += 1
+            false
+        }
+
+        assertThat(available).isFalse()
+        assertThat(hostChecks).isEqualTo(1)
     }
 
     /*****************************************

@@ -167,12 +167,22 @@ class AndroidDriver(
             runCatching { setAnimations(true) }
         }
         if (proxySet) {
-            resetProxy()
+            runCatching { resetProxy() }
+                .onFailure { LOGGER.warn("Failed to reset Maestro proxy", it) }
         }
         if (isLocationMocked) {
-            blockingStubWithTimeout.disableLocationUpdates(emptyRequest {  })
+            runCatching { blockingStubWithTimeout.disableLocationUpdates(emptyRequest {  }) }
+                .onFailure { LOGGER.warn("Failed to disable Maestro location updates", it) }
             isLocationMocked = false
         }
+
+        LOGGER.info("[Start] Close instrumentation session")
+        runCatching { instrumentationSession?.close() }
+            .onFailure { LOGGER.warn("Failed to close Maestro instrumentation stream", it) }
+        instrumentationSession = null
+        runCatching { shell("am force-stop dev.mobile.maestro") }
+            .onFailure { LOGGER.warn("Failed to stop Maestro instrumentation", it) }
+        LOGGER.info("[Done] Close instrumentation session")
 
         LOGGER.info("[Start] Uninstall driver from device")
         if (reinstallDriver) {
@@ -182,11 +192,6 @@ class AndroidDriver(
             uninstallMaestroServerApp()
         }
         LOGGER.info("[Done] Uninstall driver from device")
-
-        LOGGER.info("[Start] Close instrumentation session")
-        instrumentationSession?.close()
-        instrumentationSession = null
-        LOGGER.info("[Done] Close instrumentation session")
 
         LOGGER.info("[Start] Shutdown GRPC channel")
         channel.shutdown()

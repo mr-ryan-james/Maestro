@@ -51,6 +51,7 @@ import xcuitest.installer.LocalXCTestInstaller.*
 import java.nio.file.Paths
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
@@ -60,8 +61,14 @@ object MaestroSessionManager {
     private const val defaultHost = "localhost"
     private const val defaultXctestHost = "127.0.0.1"
     private const val defaultXcTestPort = 22087
+    private const val defaultAndroidDriverPort = 7001
 
     private val executor = Executors.newScheduledThreadPool(1)
+    private val leaseCleanupExecutor = Executors.newCachedThreadPool { runnable ->
+        Thread(runnable, "maestro-session-lease-cleanup").apply {
+            isDaemon = true
+        }
+    }
     private val logger = LoggerFactory.getLogger(MaestroSessionManager::class.java)
 
 
@@ -129,51 +136,107 @@ object MaestroSessionManager {
         val effectiveDeviceId = selectedDevice.device?.instanceId
             ?: selectedDevice.deviceId
             ?: sessionId
+        val effectiveDriverHostPort = when (selectedDevice.platform) {
+            Platform.ANDROID -> driverHostPort ?: defaultAndroidDriverPort
+            Platform.IOS -> driverHostPort ?: defaultXcTestPort
+            Platform.WEB -> driverHostPort ?: 0
+        }
         LiveTraceLogger.note(
             event = "SESSION_OPEN",
-            detail = "sessionId=$sessionId platform=${selectedDevice.platform} deviceId=$effectiveDeviceId driverHostPort=${driverHostPort ?: defaultXcTestPort} reinstallDriver=$reinstallDriver",
+            detail = "sessionId=$sessionId platform=${selectedDevice.platform} deviceId=$effectiveDeviceId driverHostPort=$effectiveDriverHostPort reinstallDriver=$reinstallDriver",
         )
 
-        val heartbeatFuture = executor.scheduleAtFixedRate(
-            {
-                try {
-                    SessionStore.default.heartbeat(sessionId, selectedDevice.platform, effectiveDeviceId)
-                } catch (e: Exception) {
-                    logger.error("Failed to record heartbeat", e)
+        val lease = SessionStore.default.acquire(
+            sessionId = sessionId,
+            platform = selectedDevice.platform,
+            deviceId = effectiveDeviceId,
+            driverHostPort = effectiveDriverHostPort,
+        )
+        if (!lease.acquired) {
+            val conflictingPort = lease.conflictingDriverHostPort?.toString() ?: "unknown"
+            throw IllegalStateException(
+                "Device $effectiveDeviceId already has an active Maestro session on driver port $conflictingPort; requested port $effectiveDriverHostPort"
+            )
+        }
+
+        val releaseLease = {
+            SessionStore.default.release(
+                sessionId,
+                selectedDevice.platform,
+                effectiveDeviceId,
+                effectiveDriverHostPort,
+            )
+        }
+
+        val leaseLost = AtomicBoolean(false)
+        val leaseLossHandler = AtomicReference<(() -> Unit)?>(null)
+        val markLeaseLost: (Throwable?) -> Unit = { cause ->
+            if (leaseLost.compareAndSet(false, true)) {
+                if (cause == null) {
+                    logger.error("Device session lease was lost for session id={}", sessionId)
+                } else {
+                    logger.error("Device session lease renewal failed for session id=$sessionId", cause)
                 }
-            },
-            0L,
-            5L,
-            TimeUnit.SECONDS
-        )
-
-        val session = createMaestro(
-            selectedDevice = selectedDevice,
-            connectToExistingSession = if (isStudio) {
-                false
-            } else {
-                SessionStore.default.hasActiveSessionForDevice(
+                leaseLossHandler.get()?.let { dispatchLeaseLoss(it) }
+            }
+        }
+        val renewLease: () -> Boolean = {
+            try {
+                val renewed = SessionStore.default.heartbeat(
                     sessionId,
                     selectedDevice.platform,
                     effectiveDeviceId,
+                    effectiveDriverHostPort,
                 )
-            },
-            isStudio = isStudio,
-            isHeadless = isHeadless,
-            screenSize = screenSize,
-            driverHostPort = driverHostPort,
-            reinstallDriver = reinstallDriver,
-            platformConfiguration = executionPlan?.workspaceConfig?.platform
-        )
+                if (!renewed) {
+                    markLeaseLost(null)
+                }
+                renewed
+            } catch (throwable: Throwable) {
+                markLeaseLost(throwable)
+                false
+            }
+        }
+
+        val heartbeatFuture = try {
+            executor.scheduleAtFixedRate(
+                { renewLease() },
+                5L,
+                5L,
+                TimeUnit.SECONDS
+            )
+        } catch (throwable: Throwable) {
+            runCatching(releaseLease)
+                .onFailure { logger.error("Failed to release device session lease", it) }
+            throw throwable
+        }
+
+        val session = try {
+            createMaestro(
+                selectedDevice = selectedDevice,
+                isStudio = isStudio,
+                isHeadless = isHeadless,
+                screenSize = screenSize,
+                driverHostPort = driverHostPort,
+                reinstallDriver = reinstallDriver,
+                platformConfiguration = executionPlan?.workspaceConfig?.platform
+            )
+        } catch (throwable: Throwable) {
+            heartbeatFuture.cancel(false)
+            runCatching(releaseLease)
+                .onFailure { logger.error("Failed to release device session lease", it) }
+            throw throwable
+        }
         logger.info(
             "Created Maestro session id={} platform={} deviceId={} driverHostPort={}",
             sessionId,
             selectedDevice.platform,
             effectiveDeviceId,
-            driverHostPort ?: defaultXcTestPort
+            effectiveDriverHostPort,
         )
 
         val cleanupPerformed = AtomicBoolean(false)
+        val shutdownHookReference = AtomicReference<Thread?>(null)
         val cleanupSession = { source: String ->
             if (!cleanupPerformed.compareAndSet(false, true)) {
                 logger.info("Cleanup already completed for session id={}, source={}", sessionId, source)
@@ -183,24 +246,43 @@ object MaestroSessionManager {
                     event = "SESSION_CLEANUP_START",
                     detail = "sessionId=$sessionId source=$source",
                 )
-                heartbeatFuture.cancel(true)
-                SessionStore.default.delete(sessionId, selectedDevice.platform, effectiveDeviceId)
                 runCatching { ScreenReporter.reportMaxDepth() }
-                if (SessionStore.default.shouldCloseSession(selectedDevice.platform, effectiveDeviceId)) {
-                    runCatching { session.close() }
-                }
+                runCatching { session.close() }
+                heartbeatFuture.cancel(false)
+                runCatching(releaseLease)
+                    .onFailure { logger.error("Failed to release device session lease", it) }
                 logger.info("Cleanup finished for session id={}, source={}", sessionId, source)
                 LiveTraceLogger.note(
                     event = "SESSION_CLEANUP_END",
                     detail = "sessionId=$sessionId source=$source",
                 )
             }
+            shutdownHookReference.getAndSet(null)?.let { hook ->
+                runCatching { Runtime.getRuntime().removeShutdownHook(hook) }
+            }
+        }
+        leaseLossHandler.set { cleanupSession("lease_lost") }
+
+        if (leaseLost.get() || !renewLease() || leaseLost.get()) {
+            cleanupSession("lease_lost_during_open")
+            throw IllegalStateException("Device session lease was lost while opening device $effectiveDeviceId")
         }
 
         val shutdownHook = thread(start = false) {
             cleanupSession("shutdown_hook")
         }
-        Runtime.getRuntime().addShutdownHook(shutdownHook)
+        try {
+            Runtime.getRuntime().addShutdownHook(shutdownHook)
+        } catch (throwable: Throwable) {
+            cleanupSession("shutdown_hook_registration_failed")
+            throw throwable
+        }
+        shutdownHookReference.set(shutdownHook)
+
+        if (leaseLost.get()) {
+            cleanupSession("lease_lost_before_return")
+            throw IllegalStateException("Device session lease was lost while opening device $effectiveDeviceId")
+        }
 
         return ManagedSession(
             sessionId = sessionId,
@@ -209,8 +291,11 @@ object MaestroSessionManager {
             deviceId = effectiveDeviceId,
         ) { source ->
             cleanupSession(source)
-            runCatching { Runtime.getRuntime().removeShutdownHook(shutdownHook) }
         }
+    }
+
+    internal fun dispatchLeaseLoss(handler: () -> Unit) {
+        leaseCleanupExecutor.execute(handler)
     }
 
     private fun selectDevice(
@@ -274,7 +359,6 @@ object MaestroSessionManager {
 
     private fun createMaestro(
         selectedDevice: SelectedDevice,
-        connectToExistingSession: Boolean,
         isStudio: Boolean,
         isHeadless: Boolean,
         screenSize: String?,
@@ -287,14 +371,14 @@ object MaestroSessionManager {
                 maestro = when (selectedDevice.device.platform) {
                     Platform.ANDROID -> createAndroid(
                         selectedDevice.device.instanceId,
-                        !connectToExistingSession,
+                        true,
                         driverHostPort,
                         reinstallDriver,
                     )
 
                     Platform.IOS -> createIOS(
                         selectedDevice.device.instanceId,
-                        !connectToExistingSession,
+                        true,
                         driverHostPort,
                         reinstallDriver,
                         deviceType = selectedDevice.device.deviceType,
@@ -311,7 +395,7 @@ object MaestroSessionManager {
                     selectedDevice.host,
                     selectedDevice.port,
                     driverHostPort,
-                    !connectToExistingSession,
+                    true,
                     reinstallDriver,
                     selectedDevice.deviceId,
                 ),
@@ -321,7 +405,7 @@ object MaestroSessionManager {
             selectedDevice.platform == Platform.IOS -> MaestroSession(
                 maestro = pickIOSDevice(
                     deviceId = selectedDevice.deviceId,
-                    openDriver = !connectToExistingSession,
+                    openDriver = true,
                     driverHostPort = driverHostPort ?: defaultXcTestPort,
                     reinstallDriver = reinstallDriver,
                     platformConfiguration = platformConfiguration,
