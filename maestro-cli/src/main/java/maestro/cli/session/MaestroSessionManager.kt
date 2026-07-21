@@ -126,16 +126,18 @@ object MaestroSessionManager {
             deviceIndex = deviceIndex,
         )
         val sessionId = UUID.randomUUID().toString()
+        val effectiveDeviceId = selectedDevice.device?.instanceId
+            ?: selectedDevice.deviceId
+            ?: sessionId
         LiveTraceLogger.note(
             event = "SESSION_OPEN",
-            detail = "sessionId=$sessionId platform=${selectedDevice.platform} deviceId=${selectedDevice.device?.instanceId ?: selectedDevice.deviceId ?: "unknown"} driverHostPort=${driverHostPort ?: defaultXcTestPort} reinstallDriver=$reinstallDriver",
+            detail = "sessionId=$sessionId platform=${selectedDevice.platform} deviceId=$effectiveDeviceId driverHostPort=${driverHostPort ?: defaultXcTestPort} reinstallDriver=$reinstallDriver",
         )
 
         val heartbeatFuture = executor.scheduleAtFixedRate(
             {
                 try {
-                    Thread.sleep(1000) // Add a 1-second delay here for fixing race condition
-                    SessionStore.heartbeat(sessionId, selectedDevice.platform)
+                    SessionStore.default.heartbeat(sessionId, selectedDevice.platform, effectiveDeviceId)
                 } catch (e: Exception) {
                     logger.error("Failed to record heartbeat", e)
                 }
@@ -150,9 +152,10 @@ object MaestroSessionManager {
             connectToExistingSession = if (isStudio) {
                 false
             } else {
-                SessionStore.hasActiveSessions(
+                SessionStore.default.hasActiveSessionForDevice(
                     sessionId,
-                    selectedDevice.platform
+                    selectedDevice.platform,
+                    effectiveDeviceId,
                 )
             },
             isStudio = isStudio,
@@ -166,7 +169,7 @@ object MaestroSessionManager {
             "Created Maestro session id={} platform={} deviceId={} driverHostPort={}",
             sessionId,
             selectedDevice.platform,
-            selectedDevice.device?.instanceId ?: selectedDevice.deviceId ?: "unknown",
+            effectiveDeviceId,
             driverHostPort ?: defaultXcTestPort
         )
 
@@ -181,9 +184,11 @@ object MaestroSessionManager {
                     detail = "sessionId=$sessionId source=$source",
                 )
                 heartbeatFuture.cancel(true)
-                SessionStore.delete(sessionId, selectedDevice.platform)
+                SessionStore.default.delete(sessionId, selectedDevice.platform, effectiveDeviceId)
                 runCatching { ScreenReporter.reportMaxDepth() }
-                runCatching { session.close() }
+                if (SessionStore.default.shouldCloseSession(selectedDevice.platform, effectiveDeviceId)) {
+                    runCatching { session.close() }
+                }
                 logger.info("Cleanup finished for session id={}, source={}", sessionId, source)
                 LiveTraceLogger.note(
                     event = "SESSION_CLEANUP_END",
@@ -201,7 +206,7 @@ object MaestroSessionManager {
             sessionId = sessionId,
             session = session,
             platform = selectedDevice.platform,
-            deviceId = selectedDevice.device?.instanceId ?: selectedDevice.deviceId,
+            deviceId = effectiveDeviceId,
         ) { source ->
             cleanupSession(source)
             runCatching { Runtime.getRuntime().removeShutdownHook(shutdownHook) }

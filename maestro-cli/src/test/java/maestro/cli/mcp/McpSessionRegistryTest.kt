@@ -14,7 +14,11 @@ import maestro.Point
 import maestro.ScreenRecording
 import maestro.SwipeDirection
 import maestro.cli.session.MaestroSessionManager
+import maestro.device.Device
+import maestro.device.DeviceService
 import maestro.device.DeviceOrientation
+import maestro.device.DeviceSpec
+import maestro.device.DeviceSpecRequest
 import maestro.device.Platform
 import okio.Sink
 import org.junit.jupiter.api.AfterEach
@@ -28,7 +32,59 @@ class McpSessionRegistryTest {
     @AfterEach
     fun tearDown() {
         runCatching { unmockkObject(MaestroSessionManager) }
+        runCatching { unmockkObject(DeviceService) }
         McpSessionRegistry.closeAll("test_cleanup")
+    }
+
+    @Test
+    fun openSessionRetriesWhenInitialHealthCheckFails() {
+        mockkObject(MaestroSessionManager)
+        mockkObject(DeviceService)
+        every { DeviceService.listConnectedDevices() } returns listOf(
+            Device.Connected(
+                instanceId = "android-device",
+                deviceSpec = DeviceSpec.fromRequest(DeviceSpecRequest.Android()),
+                description = "Android device",
+                platform = Platform.ANDROID,
+                deviceType = Device.DeviceType.REAL,
+            )
+        )
+        every {
+            MaestroSessionManager.openSession(
+                host = null,
+                port = null,
+                driverHostPort = 7106,
+                deviceId = "android-device",
+                teamId = null,
+                platform = null,
+                isStudio = false,
+                isHeadless = false,
+                screenSize = null,
+                reinstallDriver = false,
+                deviceIndex = null,
+                executionPlan = null,
+            )
+        } returnsMany listOf(
+            managedSession(
+                sessionId = "unhealthy-open-session",
+                driver = StubDriver(
+                    deviceInfoFailure = ConnectException("Connection refused"),
+                ),
+            ),
+            managedSession(
+                sessionId = "healthy-open-session",
+                driver = StubDriver(),
+            ),
+        )
+
+        val handle = McpSessionRegistry.openSession(
+            sessionManager = MaestroSessionManager,
+            deviceId = "android-device",
+            driverHostPort = 7106,
+        )
+
+        assertThat(handle.sessionId).isEqualTo("healthy-open-session")
+        assertThat(handle.healthState).isEqualTo("healthy")
     }
 
     @Test

@@ -418,8 +418,8 @@ object McpSessionRegistry {
     ): MaestroSessionManager.ManagedSession {
         var currentDeviceId = connectedDeviceId
         repeat(2) { attempt ->
-            try {
-                return sessionManager.openSession(
+            val managedSession = try {
+                sessionManager.openSession(
                     host = null,
                     port = null,
                     driverHostPort = driverHostPort,
@@ -439,7 +439,28 @@ object McpSessionRegistry {
                     throwable.message ?: throwable.javaClass.simpleName,
                 )
                 currentDeviceId = reconnectDevice(requestedDeviceId, driverHostPort)
+                return@repeat
             }
+
+            val healthFailure = runCatching {
+                managedSession.session.maestro.deviceInfo()
+            }.exceptionOrNull()
+            if (healthFailure == null) {
+                return managedSession
+            }
+
+            managedSession.close("open_health_check_failed")
+            if (attempt == 1) {
+                throw healthFailure
+            }
+            logger.warn(
+                "Retrying MCP session open after failed health check requestedDeviceId={} connectedDeviceId={} driverHostPort={} reason={}",
+                requestedDeviceId,
+                currentDeviceId,
+                driverHostPort ?: "default",
+                healthFailure.message ?: healthFailure.javaClass.simpleName,
+            )
+            Thread.sleep(500L)
         }
         error("unreachable")
     }
