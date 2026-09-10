@@ -323,7 +323,9 @@ object MaestroSessionManager {
                 val driverBuilder = DriverBuilder()
                 RealIOSDeviceDriver(
                     destination = "platform=iOS,id=${device.instanceId}",
-                    teamId = teamId,
+                    // Headless callers (MCP) cannot pass --apple-team-id; allow the
+                    // environment to supply it so a missing driver can still be built.
+                    teamId = teamId ?: System.getenv("MAESTRO_APPLE_TEAM_ID")?.takeIf { it.isNotBlank() },
                     driverBuilder = driverBuilder
                 ).validateAndUpdateDriver()
             }
