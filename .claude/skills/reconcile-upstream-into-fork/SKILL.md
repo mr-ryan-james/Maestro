@@ -1,6 +1,6 @@
 ---
 name: reconcile-upstream-into-fork
-description: Reconcile changes from the original Maestro repository into the fork while treating the fork as canonical. Use when fetching original/upstream changes, comparing divergence, merging or cherry-picking upstream commits into the fork, or resolving sync conflicts. Strongly prefer preserving fork behavior and dropping incoming upstream hunks when conflicts are ambiguous; only replace fork code with upstream code when there is a clear, concrete gain such as a verified bug fix, security fix, compatibility fix, or materially better implementation.
+description: Use when bringing changes from the original Maestro repository into Ryan's fork - fetching upstream, comparing divergence, merging or cherry-picking upstream commits, or resolving a sync conflict between fork and upstream code. The fork is canonical.
 ---
 
 # Reconcile Upstream Into Fork
@@ -27,10 +27,10 @@ git remote -v
 git branch -vv
 ```
 
-Expected Maestro setup today:
+Expected Maestro setup:
 
-- `origin` = the fork
-- `upstream` = the original Maestro repo
+- `origin` = the fork, `git@github.com:mr-ryan-james/Maestro.git`
+- `upstream` = the original repo, `git@github.com:mobile-dev-inc/Maestro.git`
 
 If remotes are named differently, identify:
 
@@ -194,27 +194,12 @@ Push to the fork remote. Do not push to the original repo.
 
 ## Decision filter
 
-Keep upstream when it is clearly one of these:
+| Keep upstream when it is | Usually reject upstream when it is |
+| --- | --- |
+| a real bug fix | style or rename churn |
+| a security fix | refactor churn with no concrete fork benefit |
+| a compatibility fix | a CI or release-process change the fork does not need |
+| a valuable test improvement | docs or changelog updates that do not help fork users |
+| a low-risk, important performance improvement | a design change that erases fork-specific behavior |
 
-- real bug fix
-- security fix
-- compatibility fix
-- valuable test improvement
-- important performance improvement with low risk
-
-Usually reject upstream when it is one of these:
-
-- style churn
-- rename churn
-- refactor churn with no concrete fork benefit
-- CI or release process changes the fork does not need
-- docs or changelog updates that do not help fork users
-- design changes that erase fork-specific behavior
-
-## Final reminder
-
-The fork is expected to outgrow the original repo.
-
-Do not treat upstream parity as the goal.
-Treat upstream as a source of ideas and fixes to intake selectively.
-When there is serious doubt, keep the fork's code and discard the incoming upstream delta.
+The fork is expected to outgrow the original repo, so upstream parity is not the goal. When there is serious doubt, keep the fork's code and discard the incoming upstream delta.
